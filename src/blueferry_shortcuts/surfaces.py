@@ -1,18 +1,18 @@
 """Plugin API 1.2 surfaces (``card``, ``notify``) as this plugin uses them.
 
-The interface names and limits come from ``blueferry.plugin_api`` when it
-already knows them; with an older plugin_api the plugin falls back to the
-values of the 1.2 spec, so it runs against either.
+All 1.2 methods and signals live on the existing ``Plugin1`` interface at
+the plugin's object path (spec: "D-Bus placement"); there are no separate
+card or notify interfaces. The limits follow the 1.2 spec.
 """
 from __future__ import annotations
 
 import os
 from dataclasses import dataclass, field
 
-import blueferry.plugin_api as _api
+from blueferry.plugin_api import PLUGIN_INTERFACE
 
-CARD_INTERFACE = getattr(_api, "CARD_INTERFACE", "io.weirdware.BlueFerry.Card1")
-NOTIFY_INTERFACE = getattr(_api, "NOTIFY_INTERFACE", "io.weirdware.BlueFerry.Notify1")
+# GetCardItems, InvokeAction, CardChanged and Notify are Plugin1 members.
+SURFACES_INTERFACE = PLUGIN_INTERFACE
 
 MAX_ITEMS = 8
 MAX_ACTIONS = 3

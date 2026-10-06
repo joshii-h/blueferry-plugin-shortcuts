@@ -32,9 +32,8 @@ from blueferry_shortcuts.settings import (
     valid_token,
 )
 from blueferry_shortcuts.surfaces import (
-    CARD_INTERFACE,
-    NOTIFY_INTERFACE,
     NOTIFY_ITEM,
+    SURFACES_INTERFACE,
     Action,
     CardItem,
     card_json,
@@ -264,11 +263,11 @@ class ShortcutsService(PluginService):
     def _card_changed(self) -> None:
         self._to_main(self.CardChanged)
 
-    @dbus.service.signal(CARD_INTERFACE, signature="")
+    @dbus.service.signal(SURFACES_INTERFACE, signature="")
     def CardChanged(self) -> None:
         """Content-free: the host calls GetCardItems again."""
 
-    @dbus.service.signal(NOTIFY_INTERFACE, signature="sssss")
+    @dbus.service.signal(SURFACES_INTERFACE, signature="sssss")
     def Notify(self, title, body, icon, action_label, action_id) -> None:
         """A desktop notification through the host's notification policy."""
 
@@ -359,14 +358,14 @@ class ShortcutsService(PluginService):
         return result(True)
 
     @dbus.service.method(
-        CARD_INTERFACE, in_signature="", out_signature="s", sender_keyword="sender",
+        SURFACES_INTERFACE, in_signature="", out_signature="s", sender_keyword="sender",
     )
     def GetCardItems(self, sender=None) -> str:
         self.admit(sender)
         return json.dumps(card_json(self.card_items()), ensure_ascii=False)
 
     @dbus.service.method(
-        CARD_INTERFACE, in_signature="sss", out_signature="s", sender_keyword="sender",
+        SURFACES_INTERFACE, in_signature="sss", out_signature="s", sender_keyword="sender",
     )
     def InvokeAction(self, item_id, action_id, args_json, sender=None) -> str:
         self.admit(sender)
