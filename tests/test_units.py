@@ -9,6 +9,7 @@ import stat
 import subprocess
 
 import pytest
+from blueferry.plugin_api import PLUGIN_INTERFACE
 from blueferry.plugin_api.testing import inline_service
 from cryptography import x509
 from fakehost import FakeHost
@@ -25,7 +26,7 @@ from blueferry_shortcuts.settings import (
     new_token,
     valid_token,
 )
-from blueferry_shortcuts.surfaces import CARD_INTERFACE, NOTIFY_INTERFACE, language
+from blueferry_shortcuts.surfaces import language
 from blueferry_shortcuts.tls import SERVER_DAYS, CertificateStore
 
 ROUTES = """Iface\tDestination\tGateway \tFlags\tRefCnt\tUse\tMetric\tMask\t\tMTU\tWindow\tIRTT
@@ -51,8 +52,6 @@ def test_manifest_declares_the_12_surfaces_and_settings() -> None:
     assert fields["token"].secret
     assert fields["allow_clipboard_read"].empty() is False
     assert fields["allow_all_interfaces"].empty() is False
-    assert CARD_INTERFACE.startswith("io.weirdware.BlueFerry.")
-    assert NOTIFY_INTERFACE.startswith("io.weirdware.BlueFerry.")
 
 
 def test_activation_files_and_autostart(tmp_path) -> None:
@@ -62,6 +61,20 @@ def test_activation_files_and_autostart(tmp_path) -> None:
     assert "serve" in service_path.read_text()
     autostart = cli.install_autostart(tmp_path / "config")
     assert "Exec=" in autostart.read_text() and autostart.read_text().count("serve") == 1
+
+
+def test_surface_members_live_on_plugin1() -> None:
+    """Spec "D-Bus placement": no Card1/Notify1, everything on Plugin1."""
+    table = ShortcutsService._dbus_class_table[
+        f"{ShortcutsService.__module__}.{ShortcutsService.__name__}"
+    ]
+    assert set(table) - {"org.freedesktop.DBus.Introspectable"} == {PLUGIN_INTERFACE}
+    members = table[PLUGIN_INTERFACE]
+    for name in ("GetInfo", "Status", "GetConfig", "SetConfig",
+                 "GetCardItems", "InvokeAction", "CardChanged", "Notify"):
+        assert name in members, name
+    assert members["Notify"]._dbus_signature == "sssss"
+    assert members["InvokeAction"]._dbus_in_signature == "sss"
 
 
 # ---- settings ---------------------------------------------------------------------
