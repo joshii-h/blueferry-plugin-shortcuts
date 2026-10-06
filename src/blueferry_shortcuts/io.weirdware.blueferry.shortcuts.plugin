@@ -1,0 +1,47 @@
+[BlueFerry Plugin]
+Id=io.weirdware.blueferry.shortcuts
+Name=iOS Shortcuts bridge
+Version=0.1.0
+ApiVersion=1.2
+MinBlueFerry=0.8
+Capabilities=card;notify;
+Homepage=https://github.com/joshii-h/blueferry-plugin-shortcuts
+Source=https://github.com/joshii-h/blueferry-plugin-shortcuts
+Exec=blueferry-shortcuts serve
+Cli=blueferry-shortcuts
+Alias=shortcuts
+
+[Config bind_address]
+Label=Listen on
+Type=string
+Help=IP address or interface name (e.g. 192.168.1.20 or enp5s0). Empty: the interface of the default route.
+
+[Config allow_all_interfaces]
+Label=Allow all interfaces
+Type=bool
+Default=false
+Help=Needed to listen on 0.0.0.0 or ::. Keep it off unless you know every network this PC joins.
+
+[Config port]
+Label=Port
+Type=int
+Default=47801
+Min=1024
+Max=65535
+
+[Config token]
+Label=Access token
+Type=secret
+Help=Created automatically. Shortcuts send it as "Authorization: Bearer <token>".
+
+[Config allow_clipboard_read]
+Label=Let shortcuts read the PC clipboard
+Type=bool
+Default=false
+Help=Enables GET /clipboard. Off by default: anyone with the token could read what you copy.
+
+[Config accept_images]
+Label=Accept images for the clipboard
+Type=bool
+Default=false
+Help=PNG, JPEG, GIF or WebP up to 10 MB on POST /clipboard.
