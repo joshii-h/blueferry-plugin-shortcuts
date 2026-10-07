@@ -708,15 +708,21 @@ class ShortcutsService(PluginService):
         if item_id == "bridge" and action_id == "setup_iphone":
             return self.begin_setup()
         if item_id == "plain" and action_id == "allow_network":
-            try:
-                chosen = self.approve_current_network()
-            except (SettingsError, OSError) as error:
-                return result(False, str(error))
-            if not chosen:
+            with self._lock:
+                decision = self._decision
+            if decision.reason != "foreign":
                 return result(False, t["allow_network_none"])
-            self._card_changed()
-            return result(True, t["allow_network_done"].format(
-                name=", ".join(network.name for network in chosen)))
+
+            def approve() -> None:
+                try:
+                    self.approve_current_network()
+                except (SettingsError, OSError):
+                    log.warning("could not store the approved network")
+                self._card_changed()
+
+            # NetworkManager answers over D-Bus: not on the main loop.
+            self._run_async(approve)
+            return result(True, t["allow_network_done"].format(name=decision.name))
         if item_id == "bridge" and action_id in ("show_setup", "hide_setup"):
             with self._lock:
                 self._show_setup = action_id == "show_setup"

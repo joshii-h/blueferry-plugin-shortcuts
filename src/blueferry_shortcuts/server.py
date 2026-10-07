@@ -367,7 +367,8 @@ class _Handler(DeadlineRequestHandler):
             endpoints.on_setup_test()
             self._json(200, {"ok": True})
             return
-        if method not in ("GET", "HEAD"):
+        if method != "GET":
+            # Not HEAD either: only a real page load may spend a one-time link.
             self._json(405, {"error": "method-not-allowed"}, {"Allow": "GET"})
             return
         if path == "/setup":

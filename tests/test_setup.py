@@ -296,6 +296,7 @@ def test_network_changes_open_and_close_the_http_listener(harness) -> None:
     assert h.host.item("plain")["title"] == "Unverschlüsselt pausiert – offenes WLAN"
     assert h.host.invoke("plain", "allow_network")["ok"] is False
     assert h.service._bridge.plain_address is None
+    assert _https(h, "HEAD", "/setup/whatever")[0] == 405
     networks.change([HOME, Network("x" * 12, "Gast", False, open_wifi=True)])
     assert h.service._bridge.plain_address is None, "open Wi-Fi beside home: never"
     networks.change([HOME])
