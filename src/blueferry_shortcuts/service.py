@@ -8,8 +8,11 @@ loop through ``_to_main``. Shared state sits behind one lock.
 from __future__ import annotations
 
 import datetime as dt
+import http.client
 import json
 import logging
+import socket
+import ssl
 import threading
 import time
 from collections import OrderedDict
@@ -19,10 +22,12 @@ from urllib.parse import urlsplit
 
 import dbus.service
 from blueferry.plugin_api.config import ConfigError
+from blueferry.plugin_api.config_flow import ConfigTestResult
 from blueferry.plugin_api.manifest import PluginManifest
 from blueferry.plugin_api.service import PluginCallError, PluginService
 from blueferry_plugin_kit import netaddr
 from blueferry_plugin_kit.clipboard import Clipboard
+from blueferry_plugin_kit.configtest import failed, passed
 from blueferry_plugin_kit.lanserver.tls import CertificateStore, Material
 
 from blueferry_shortcuts.server import HttpsBridge
@@ -51,6 +56,7 @@ MAX_LINKS = 20
 REVEAL_SECONDS = 120
 MAINTAIN_SECONDS = 60
 MAX_ARGS = 4096
+PROBE_TIMEOUT_S = 5
 
 
 def _size(count: int) -> str:
@@ -215,6 +221,9 @@ class ShortcutsService(PluginService):
     def url(self) -> str:
         with self._lock:
             host, port = self._host, self._settings.port
+        return self._url_for(host, port)
+
+    def _url_for(self, host: str, port: int) -> str:
         if not host:
             return ""
         if netaddr.is_wildcard(host):
@@ -511,6 +520,68 @@ class ShortcutsService(PluginService):
             if token is not None:
                 self._token = str(token)
         self._card_changed()
+
+    def test_config(self, values: dict[str, object]) -> ConfigTestResult:
+        """Worker thread. "Test connection": nothing is stored or restarted.
+
+        With the address and port the endpoint already serves, ask it for
+        ``/ca.crt`` like the iPhone would; otherwise check that the
+        address and port can be bound. The address is shown in the answer
+        (it is what the shortcut needs) but never logged.
+        """
+        bind = str(values.get("bind_address") or "").strip()
+        allow_all = values.get("allow_all_interfaces") is True
+        reason = netaddr.check_setting(bind, allow_all)
+        if reason:
+            raise ConfigError("bind_address", reason)
+        token = values.get("token")
+        if token is not None and not valid_token(str(token)):
+            raise ConfigError("token", "must be 16 to 128 printable characters without spaces")
+        port = values.get("port")
+        port = port if isinstance(port, int) and not isinstance(port, bool) else 47801
+        try:
+            host = self._resolve(bind, allow_all)
+        except netaddr.AddressError as error:
+            raise ConfigError("bind_address", str(error)) from None
+        url = self._url_for(host, port)
+        with self._lock:
+            running = self._host == host and self._settings.port == port
+        if running:
+            problem = self._probe(url)
+            if problem is None:
+                return passed(f"Reachable at {url}.")
+            return failed(f"The endpoint at {url} did not answer ({problem}).")
+        try:
+            self._try_bind(host, port)
+        except OSError as error:
+            raise ConfigError("port", _reason(error)) from None
+        return passed(f"{url} is free; save to start listening there.")
+
+    def _probe(self, url: str) -> str | None:
+        """None when the own endpoint serves its CA over trusted TLS."""
+        parts = urlsplit(url)
+        try:
+            context = ssl.create_default_context(cafile=str(self._certificates.ca_cert_path))
+            connection = http.client.HTTPSConnection(
+                parts.hostname, parts.port, context=context, timeout=PROBE_TIMEOUT_S,
+            )
+            try:
+                connection.request("GET", "/ca.crt")
+                status = connection.getresponse().status
+            finally:
+                connection.close()
+        except ssl.SSLError:
+            return "certificate"
+        except (OSError, http.client.HTTPException):
+            return "no connection"
+        return None if status == 200 else f"HTTP {status}"
+
+    @staticmethod
+    def _try_bind(host: str, port: int) -> None:
+        family = socket.AF_INET6 if ":" in host else socket.AF_INET
+        with socket.socket(family, socket.SOCK_STREAM) as probe:
+            probe.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+            probe.bind((host, port))
 
 
 def _reason(error: Exception) -> str:

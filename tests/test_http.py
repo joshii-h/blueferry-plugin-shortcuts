@@ -444,3 +444,10 @@ def test_handshake_reason_is_content_free() -> None:
     assert handshake_reason(error) == "SSLError"
     assert handshake_reason(TimeoutError()) == "timeout"
     assert handshake_reason(ConnectionResetError(104, "peer 10.0.0.2")) == "ConnectionResetError"
+
+
+def test_test_connection_asks_the_running_endpoint(harness) -> None:
+    h = harness()
+    result = h.host.test_config({"port": h.port})
+    assert result == {"ok": True, "message": f"Reachable at https://127.0.0.1:{h.port}."}
+    h.host.assert_never_sent(h.token)
