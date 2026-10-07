@@ -108,6 +108,25 @@ def test_default_route_picks_lowest_metric() -> None:
     assert netaddr.default_route_interface(ROUTES.splitlines()[0]) is None
 
 
+VPN_ROUTES = ROUTES + "wg0\t00000000\t00000000\t0001\t0\t0\t50\t00000000\t0\t0\t0\n"
+
+
+def test_a_vpn_default_route_is_passed_over_for_the_lan(tmp_path) -> None:
+    assert netaddr.default_route_interface(VPN_ROUTES) == "enp5s0"
+    assert netaddr.default_route_tunnel(VPN_ROUTES) == ("wg0", True)
+    assert netaddr.default_route_tunnel(ROUTES) is None
+    only = ROUTES.splitlines()[0] + "\n" + VPN_ROUTES.splitlines()[-1]
+    assert netaddr.default_route_interface(only) == "wg0"
+    assert netaddr.default_route_tunnel(only) == ("wg0", False)
+    # A custom name (NetworkManager WireGuard profile) is known by its type.
+    for name, kind in (("Immeditech", "65534"), ("enp5s0", "1"), ("vpn1", "512")):
+        (tmp_path / name).mkdir()
+        (tmp_path / name / "type").write_text(kind + "\n")
+    assert netaddr.is_tunnel("Immeditech", tmp_path) and netaddr.is_tunnel("vpn1", tmp_path)
+    assert not netaddr.is_tunnel("enp5s0", tmp_path)
+    assert netaddr.is_tunnel("tun0", tmp_path) and netaddr.is_tunnel("ppp0", tmp_path)
+
+
 @pytest.mark.parametrize("setting,allow_all,ok", [
     ("", False, True), ("192.168.1.20", False, True), ("enp5s0", False, True),
     ("0.0.0.0", False, False), ("::", False, False), ("0.0.0.0", True, True),

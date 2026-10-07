@@ -44,7 +44,7 @@ BlueFerry's settings, Plugins > iOS Shortcuts bridge, or
 
 | Setting | Default | Meaning |
 | --- | --- | --- |
-| `bind_address` | empty | IP address or interface name to listen on. Empty: the IPv4 address of the interface that carries the default route. Followed automatically when that address changes. |
+| `bind_address` | empty | IP address or interface name to listen on. Empty: the IPv4 address of the interface that carries the default route; a VPN or tunnel (wg*, tun*, tap*, ppp* or that type) is passed over for a LAN interface, and the card shows a hint. Followed automatically when that address changes. |
 | `allow_all_interfaces` | off | Required for `0.0.0.0` / `::`. Without it a wildcard address is refused. |
 | `port` | 47801 | TCP port. |
 | `token` | generated | Access token (`Authorization: Bearer <token>`). Created on first start; "New token" on the card replaces it. |

@@ -91,6 +91,7 @@ class ShortcutsService(PluginService):
         bridge_factory: Callable[[Any], HttpsBridge] = HttpsBridge,
         resolve: Callable[[str, bool], str] = netaddr.resolve,
         local_addresses: Callable[[], list[str]] = netaddr.local_addresses,
+        route_tunnel: Callable[[], tuple[str, bool] | None] = netaddr.default_route_tunnel,
         lang: str | None = None,
         wall_clock: Callable[[], float] = time.time,
         **kwargs: Any,
@@ -102,6 +103,7 @@ class ShortcutsService(PluginService):
         self._bridge = bridge_factory(self)
         self._resolve = resolve
         self._local_addresses = local_addresses
+        self._route_tunnel = route_tunnel
         self._t = texts(lang or language())
         self._now = wall_clock
         self._lock = threading.RLock()
@@ -313,6 +315,9 @@ class ShortcutsService(PluginService):
             "bridge", "phone" if url else "dialog-warning", t["bridge"], subtitle,
             (toggle, Action("new_token", t["new_token"], "view-refresh")),
         ))
+        hint = self._vpn_hint()
+        if hint is not None:
+            items.append(hint)
         if show:
             if url:
                 items.append(CardItem("setup_url", "network-server", t["url"], url))
@@ -332,6 +337,22 @@ class ShortcutsService(PluginService):
                         t["ca_hint"].format(url=url),
                     ))
         return items
+
+    def _vpn_hint(self) -> CardItem | None:
+        """Warn when a VPN carries the default route (automatic choice only)."""
+        with self._lock:
+            automatic = not self._settings.bind_address
+        if not automatic:
+            return None
+        try:
+            tunnel = self._route_tunnel()
+        except OSError:
+            return None
+        if tunnel is None:
+            return None
+        name, lan_found = tunnel
+        text = self._t["vpn_lan" if lan_found else "vpn_only"].format(vpn=name)
+        return CardItem("vpn", "network-vpn", self._t["vpn_title"], text)
 
     def _when(self, epoch: int) -> str:
         moment = dt.datetime.fromtimestamp(epoch)

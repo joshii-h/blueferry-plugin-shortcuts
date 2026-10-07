@@ -1,7 +1,9 @@
 """Which local address to listen on.
 
 The default is the IPv4 address of the interface that carries the default
-route: that is the LAN the iPhone shares with the PC. The setting may name
+route: that is the LAN the iPhone shares with the PC. A VPN or tunnel
+interface (wg*, tun*, tap*, ppp*, or a custom name of that type) is passed
+over for a LAN interface with a default route, and the card says so. The setting may name
 an address or an interface instead. A wildcard address (0.0.0.0, ::) is
 refused unless the user opted in, so the endpoint never appears on every
 network the PC joins by accident.
@@ -25,14 +27,37 @@ class AddressError(Exception):
     """No address to listen on; the message is shown in the card."""
 
 
-def default_route_interface(route_table: str | None = None) -> str | None:
-    """The interface of the IPv4 default route with the lowest metric."""
+_TUNNEL_PREFIXES = ("wg", "tun", "tap", "ppp")
+# ARPHRD_NONE (WireGuard, tun) and ARPHRD_PPP in /sys/class/net/*/type.
+_TUNNEL_TYPES = frozenset({65534, 512})
+SYSFS_NET = Path("/sys/class/net")
+
+
+def is_tunnel(name: str, sysfs: Path = SYSFS_NET) -> bool:
+    """A VPN or tunnel interface: by name (wg*, tun*, tap*, ppp*) or, for
+    custom names such as a NetworkManager WireGuard profile, by its type."""
+    if name.startswith(_TUNNEL_PREFIXES):
+        return True
+    if not _IFNAME.fullmatch(name):
+        return False
+    base = sysfs / name
+    if (base / "tun_flags").exists():
+        return True
+    try:
+        kind = int((base / "type").read_text(encoding="ascii").strip())
+    except (OSError, ValueError):
+        return False
+    return kind in _TUNNEL_TYPES
+
+
+def default_routes(route_table: str | None = None) -> list[str]:
+    """Interfaces with an IPv4 default route, lowest metric first."""
     if route_table is None:
         try:
             route_table = Path("/proc/net/route").read_text(encoding="ascii", errors="replace")
         except OSError:
-            return None
-    best: tuple[int, str] | None = None
+            return []
+    found: list[tuple[int, str]] = []
     for line in route_table.splitlines()[1:]:
         parts = line.split()
         if len(parts) < 8:
@@ -45,11 +70,31 @@ def default_route_interface(route_table: str | None = None) -> str | None:
             metric = int(parts[6])
         except ValueError:
             continue
-        if mask != 0:
-            continue
-        if best is None or metric < best[0]:
-            best = (metric, name)
-    return best[1] if best else None
+        if mask == 0:
+            found.append((metric, name))
+    return [name for _metric, name in sorted(found)]
+
+
+def default_route_interface(
+    route_table: str | None = None, tunnel: Callable[[str], bool] = is_tunnel,
+) -> str | None:
+    """The interface of the IPv4 default route with the lowest metric,
+    preferring LAN interfaces: when a VPN carries the default route, the
+    iPhone still talks to the PC over the physical network."""
+    routes = default_routes(route_table)
+    lan = [name for name in routes if not tunnel(name)]
+    return (lan or routes or [None])[0]
+
+
+def default_route_tunnel(
+    route_table: str | None = None, tunnel: Callable[[str], bool] = is_tunnel,
+) -> tuple[str, bool] | None:
+    """``(tunnel, lan_found)`` when a VPN or tunnel carries the default
+    route; ``lan_found`` tells whether a LAN interface was used instead."""
+    routes = default_routes(route_table)
+    if not routes or not tunnel(routes[0]):
+        return None
+    return routes[0], any(not tunnel(name) for name in routes)
 
 
 def interface_address(name: str) -> str | None:

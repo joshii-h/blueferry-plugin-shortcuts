@@ -91,6 +91,10 @@ _TEXTS = {
         "open": "Open",
         "link_gone": "The link is no longer available",
         "unknown_action": "Unknown action",
+        "vpn_title": "VPN carries the default route",
+        "vpn_lan": "{vpn} is a VPN; listening on the LAN interface instead",
+        "vpn_only": "Only {vpn} (a VPN) has a default route; the iPhone may not "
+                    "reach this address. Set an interface in the settings.",
         "date": "%b %d, %H:%M",
     },
     "de": {
@@ -118,6 +122,10 @@ _TEXTS = {
         "open": "Öffnen",
         "link_gone": "Der Link ist nicht mehr verfügbar",
         "unknown_action": "Unbekannte Aktion",
+        "vpn_title": "VPN trägt die Standardroute",
+        "vpn_lan": "{vpn} ist ein VPN; Empfang stattdessen auf der LAN-Schnittstelle",
+        "vpn_only": "Nur {vpn} (ein VPN) hat eine Standardroute; das iPhone erreicht "
+                    "diese Adresse vielleicht nicht. Schnittstelle in den Einstellungen setzen.",
         "date": "%d.%m. %H:%M",
     },
 }

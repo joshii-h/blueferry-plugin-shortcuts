@@ -51,11 +51,13 @@ class Harness:
         self.port = _free_port()
         self.store.save(Settings(port=self.port, **settings))
         self.clipboard = FakeClipboard("PC-Text äöü")
+        self.tunnel: tuple[str, bool] | None = None
         self.service = inline_service(
             ShortcutsService, load_manifest(), None,
             settings=self.store, clipboard=self.clipboard,
             resolve=lambda setting, allow_all: "127.0.0.1",
             local_addresses=lambda: ["127.0.0.1"], lang="de",
+            route_tunnel=lambda: self.tunnel,
         )
         self.host = FakeHost(self.service)
         self.service.start()
@@ -377,3 +379,15 @@ def test_revealing_again_keeps_a_single_timer(harness) -> None:
     assert [t.is_alive() for t in timers] == [False] * 19 + [True]
     h.host.invoke("setup_token", "hide")
     assert h.service._reveal_timer is None
+
+
+def test_card_hints_at_a_vpn_default_route(harness) -> None:
+    h = harness()
+    assert "vpn" not in [i["id"] for i in h.host.items()]
+    h.tunnel = ("wg0", True)
+    item = next(i for i in h.host.items() if i["id"] == "vpn")
+    assert item["title"] == "VPN trägt die Standardroute"
+    assert "wg0" in item["subtitle"] and "LAN" in item["subtitle"]
+    h.tunnel = ("Immeditech", False)
+    item = next(i for i in h.host.items() if i["id"] == "vpn")
+    assert "Schnittstelle in den Einstellungen" in item["subtitle"]
