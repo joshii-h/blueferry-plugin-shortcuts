@@ -152,6 +152,8 @@ def sniff_image(data: bytes) -> str | None:
 
 
 class _Server(HardenedHTTPServer):
+    log = log  # under this plugin's logger, not the kit's
+
     def __init__(self, address, endpoints: Endpoints, context: ssl.SSLContext,
                  limiter: RateLimiter) -> None:
         self.endpoints = endpoints
@@ -167,6 +169,7 @@ class _Server(HardenedHTTPServer):
 
 
 class _Handler(DeadlineRequestHandler):
+    log = log
     server: _Server
     server_version = "BlueFerryShortcuts"
     timeout = CONNECTION_TIMEOUT_S
