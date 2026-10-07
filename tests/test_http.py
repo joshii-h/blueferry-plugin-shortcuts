@@ -360,3 +360,20 @@ def test_at_most_two_connections_per_address(harness) -> None:
     time.sleep(0.2)
     status, _type, _body = harness.request("GET", "/ca.crt", token=False)
     assert status == 200
+
+
+def test_revealing_again_keeps_a_single_timer(harness) -> None:
+    import threading
+
+    h = harness()
+    h.host.invoke("bridge", "show_setup")
+    before = threading.active_count()
+    timers = []
+    for _ in range(20):
+        assert h.host.invoke("setup_token", "reveal")["ok"] is True
+        timers.append(h.service._reveal_timer)
+    time.sleep(0.1)  # cancelled timers end at once
+    assert threading.active_count() - before <= 1
+    assert [t.is_alive() for t in timers] == [False] * 19 + [True]
+    h.host.invoke("setup_token", "hide")
+    assert h.service._reveal_timer is None

@@ -112,6 +112,7 @@ class ShortcutsService(PluginService):
         self._error = ""
         self._show_setup = False
         self._revealed_at: float | None = None
+        self._reveal_timer: threading.Timer | None = None
         self._links: OrderedDict[str, str] = OrderedDict()
         self._link_counter = 0
         self._battery: dict[str, object] | None = None
@@ -180,6 +181,10 @@ class ShortcutsService(PluginService):
     def stop(self) -> None:
         self._stopping.set()
         self._bridge.stop()
+        with self._lock:
+            if self._reveal_timer is not None:
+                self._reveal_timer.cancel()
+                self._reveal_timer = None
 
     def _cert_addresses(self, host: str) -> list[str]:
         return self._local_addresses() if netaddr.is_wildcard(host) else [host]
@@ -357,10 +362,15 @@ class ShortcutsService(PluginService):
         elif item_id == "setup_token" and action_id in ("reveal", "hide"):
             with self._lock:
                 self._revealed_at = time.monotonic() if action_id == "reveal" else None
-            if action_id == "reveal":
-                timer = threading.Timer(REVEAL_SECONDS + 1, self._card_changed)
-                timer.daemon = True
-                timer.start()
+                # One timer at most: each reveal restarts it instead of
+                # piling up threads that refresh the card.
+                if self._reveal_timer is not None:
+                    self._reveal_timer.cancel()
+                    self._reveal_timer = None
+                if action_id == "reveal":
+                    self._reveal_timer = threading.Timer(REVEAL_SECONDS + 1, self._card_changed)
+                    self._reveal_timer.daemon = True
+                    self._reveal_timer.start()
         else:
             return result(False, t["unknown_action"])
         self._card_changed()
