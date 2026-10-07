@@ -201,10 +201,10 @@ def test_get_clipboard_only_when_enabled(harness) -> None:
 
 def test_link_notification_opens_through_invoke_action(harness) -> None:
     h = harness()
-    url = "https://example.org/a?b=c"
+    url = "https://user:pw@Example.org:8443/reset?token=geheim#x"
     assert h.request("POST", "/link", {"url": url})[0] == 200
     title, body, _icon, label, action = h.host.notifications[-1]
-    assert (title, body, label) == ("Link vom iPhone", url, "Öffnen") and action
+    assert (title, body, label) == ("Link vom iPhone", "example.org", "Öffnen") and action
     assert h.host.click_notification() == {"ok": True, "message": None, "open_uri": url}
     assert h.host.invoke("notify", "open-999")["ok"] is False
     assert h.request("POST", "/link", b"http://192.168.1.1/",

@@ -13,7 +13,7 @@ session bus and talks to BlueFerry only through `blueferry.plugin_api`.
 | --- | --- |
 | `POST /clipboard` | Text (optionally an image) goes to the desktop clipboard via `wl-copy`, marked as sensitive so clipboard managers keep it out of their history (wl-clipboard 2.3+). Notification "Clipboard from iPhone". |
 | `GET /clipboard` | Returns the PC clipboard as text, so a shortcut can copy it to the iPhone. **Off by default.** |
-| `POST /link` | Notification with the URL and an "Open" button (http/https only). |
+| `POST /link` | Notification with the host name and an "Open" button that opens the full URL (http/https only). |
 | `POST /battery` | Card item "iPhone battery 87 % ⚡ charging" with the time of the report. |
 | `GET /ca.crt` | The plugin's CA certificate, to install on the iPhone (no token needed; it is public). |
 
@@ -67,7 +67,8 @@ BlueFerry's settings, Plugins > iOS Shortcuts bridge, or
   trickling bytes cannot hold a connection.
 - No request content is logged, and nothing is forwarded to the network:
   requests only reach the clipboard, the card and notifications.
-  Notifications for the clipboard show the length, not the text.
+  Notifications for the clipboard show the length, not the text; links show
+  only the host, never path or query.
 - Token, settings and keys are owner-only files in
   `~/.config/blueferry/plugins/io.weirdware.blueferry.shortcuts/`. The token is
   not kept in the keyring on purpose: you need to read it to type it into

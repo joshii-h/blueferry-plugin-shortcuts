@@ -15,6 +15,7 @@ import time
 from collections import OrderedDict
 from collections.abc import Callable
 from typing import Any
+from urllib.parse import urlsplit
 
 import dbus.service
 from blueferry.plugin_api.config import ConfigError
@@ -55,6 +56,11 @@ def _size(count: int) -> str:
     if count >= 1024 * 1024:
         return f"{count / (1024 * 1024):.1f} MB"
     return f"{max(1, round(count / 1024))} KB"
+
+
+def _host_of(url: str) -> str:
+    host = urlsplit(url).hostname or ""
+    return f"[{host}]" if ":" in host else host
 
 
 def battery_icon(level: int, charging: bool) -> str:
@@ -238,7 +244,10 @@ class ShortcutsService(PluginService):
             self._links[action_id] = url
             while len(self._links) > MAX_LINKS:
                 self._links.popitem(last=False)
-        self._notify(self._t["link_title"], url, "internet-web-browser",
+        # The notification shows only the host: paths and queries may hold
+        # tokens or personal data and stay on the screen (and in the
+        # notification history). The full URL waits in _links for "Open".
+        self._notify(self._t["link_title"], _host_of(url), "internet-web-browser",
                      self._t["open"], action_id)
 
     def on_battery(self, level: int, charging: bool | None) -> None:
