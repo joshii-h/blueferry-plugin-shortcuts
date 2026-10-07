@@ -18,12 +18,11 @@ import ssl
 from dataclasses import dataclass
 from pathlib import Path
 
+from blueferry_plugin_kit.secrets import read_private, write_private
 from cryptography import x509
 from cryptography.hazmat.primitives import hashes, serialization
 from cryptography.hazmat.primitives.asymmetric import ec
 from cryptography.x509.oid import ExtendedKeyUsageOID, NameOID
-
-from blueferry_shortcuts.settings import read_private, write_private
 
 CA_DAYS = 3650
 SERVER_DAYS = 397

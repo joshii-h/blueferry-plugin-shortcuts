@@ -11,40 +11,30 @@ for typing it into a shortcut, and the HTTPS thread checks it per request.
 from __future__ import annotations
 
 import json
-import os
 import re
 import secrets
-import stat
-import tempfile
 from dataclasses import asdict, dataclass, replace
 from pathlib import Path
 
+from blueferry_plugin_kit.secrets import (
+    SecretsError,
+    config_dir,
+    read_private,
+    state_dir,
+    write_private,
+)
+
 from blueferry_shortcuts import PLUGIN_ID
 
-MAX_FILE_BYTES = 16 * 1024
 DEFAULT_PORT = 47801
 # No 0/o, 1/l/i: the token is typed into the Shortcuts app by hand.
 TOKEN_ALPHABET = "abcdefghjkmnpqrstuvwxyz23456789"
 TOKEN_GROUPS = 6
 _TOKEN = re.compile(r"^[\x21-\x7e]{16,128}$")
 
-
-class SettingsError(Exception):
-    pass
-
-
-def config_dir() -> Path:
-    config_home = os.environ.get("XDG_CONFIG_HOME") or os.path.join(
-        os.path.expanduser("~"), ".config"
-    )
-    return Path(config_home) / "blueferry" / "plugins" / PLUGIN_ID
-
-
-def state_dir() -> Path:
-    state_home = os.environ.get("XDG_STATE_HOME") or os.path.join(
-        os.path.expanduser("~"), ".local", "state"
-    )
-    return Path(state_home) / "blueferry" / "plugins" / PLUGIN_ID
+# The kit's private-file helpers raise SecretsError; every ``except
+# SettingsError`` in the plugin catches them through this alias.
+SettingsError = SecretsError
 
 
 @dataclass(frozen=True, slots=True)
@@ -71,49 +61,10 @@ def valid_token(token: str) -> bool:
     return bool(_TOKEN.fullmatch(token))
 
 
-def private_dir(path: Path) -> Path:
-    path.mkdir(parents=True, exist_ok=True, mode=0o700)
-    info = os.lstat(path)
-    if not stat.S_ISDIR(info.st_mode) or info.st_uid != os.getuid():
-        raise SettingsError("config directory has the wrong owner or type")
-    path.chmod(0o700)
-    return path
-
-
-def write_private(path: Path, data: str | bytes) -> None:
-    private_dir(path.parent)
-    descriptor, temporary = tempfile.mkstemp(prefix=".tmp-", dir=path.parent)
-    try:
-        os.fchmod(descriptor, 0o600)
-        with os.fdopen(descriptor, "wb") as stream:
-            descriptor = -1
-            stream.write(data.encode("utf-8") if isinstance(data, str) else data)
-        os.replace(temporary, path)
-    finally:
-        if descriptor >= 0:
-            os.close(descriptor)
-        Path(temporary).unlink(missing_ok=True)
-
-
-def read_private(path: Path, limit: int = MAX_FILE_BYTES) -> bytes:
-    flags = os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0) | getattr(os, "O_CLOEXEC", 0)
-    descriptor = os.open(path, flags)
-    with os.fdopen(descriptor, "rb") as stream:
-        info = os.fstat(stream.fileno())
-        if not stat.S_ISREG(info.st_mode) or info.st_uid != os.getuid():
-            raise SettingsError(f"{path.name} has the wrong owner or type")
-        if stat.S_IMODE(info.st_mode) & 0o077:
-            raise SettingsError(f"{path.name} is readable by other users")
-        data = stream.read(limit + 1)
-    if len(data) > limit:
-        raise SettingsError(f"{path.name} is too large")
-    return data
-
-
 class SettingsStore:
     def __init__(self, directory: Path | None = None, state: Path | None = None) -> None:
-        self.directory = directory or config_dir()
-        self.state_directory = state or state_dir()
+        self.directory = directory or config_dir(PLUGIN_ID)
+        self.state_directory = state or state_dir(PLUGIN_ID)
 
     @property
     def config_path(self) -> Path:
