@@ -1,4 +1,4 @@
-"""Manifest, settings, addresses, certificates, clipboard helper and CLI."""
+"""Manifest, settings, addresses, certificates and CLI."""
 from __future__ import annotations
 
 import datetime as dt
@@ -6,7 +6,6 @@ import ipaddress
 import json
 import os
 import stat
-import subprocess
 
 import pytest
 from blueferry.plugin_api import PLUGIN_INTERFACE
@@ -16,7 +15,6 @@ from fakehost import FakeHost
 
 from blueferry_shortcuts import PLUGIN_ID, load_manifest, manifest_text, netaddr
 from blueferry_shortcuts import __main__ as cli
-from blueferry_shortcuts.clipboard import Clipboard, ClipboardError, helper_environment
 from blueferry_shortcuts.server import check_url, parse_flag, parse_level, sniff_image
 from blueferry_shortcuts.service import ShortcutsService, battery_icon, mask_token
 from blueferry_shortcuts.settings import (
@@ -196,67 +194,6 @@ def test_language_detection() -> None:
     assert language({"LANG": "de_CH.UTF-8"}) == "de"
     assert language({"LANGUAGE": "en_US:de", "LANG": "de_DE.UTF-8"}) == "en"
     assert language({}) == "en"
-
-
-# ---- clipboard helper ---------------------------------------------------------------
-
-class _Runner:
-    def __init__(self, help_text="  --sensitive  Hint", returncode=0, stdout=b"") -> None:
-        self.calls = []
-        self.help_text = help_text
-        self.returncode = returncode
-        self.stdout = stdout
-
-    def __call__(self, argv, **kwargs):
-        self.calls.append((argv, kwargs))
-        if argv[-1] == "--help":
-            return subprocess.CompletedProcess(argv, 0, self.help_text, "")
-        return subprocess.CompletedProcess(argv, self.returncode, self.stdout, b"")
-
-
-def _clipboard(runner, environ=None) -> Clipboard:
-    environ = environ or {"WAYLAND_DISPLAY": "wayland-0", "PATH": "/usr/bin",
-                          "SECRET_ENV": "x", "LC_ALL": "C"}
-    return Clipboard(environ=environ, which=lambda name: f"/usr/bin/{name}", run=runner)
-
-
-def test_copy_uses_stdin_sensitive_hint_and_clean_environment() -> None:
-    runner = _Runner()
-    assert _clipboard(runner).copy_text("geheim") is True
-    argv, kwargs = runner.calls[-1]
-    assert argv == ["/usr/bin/wl-copy", "--type", "text/plain;charset=utf-8", "--sensitive"]
-    assert kwargs["input"] == b"geheim" and "geheim" not in " ".join(argv)
-    assert kwargs["stdout"] == subprocess.DEVNULL
-    assert "SECRET_ENV" not in kwargs["env"] and kwargs["env"]["LC_ALL"] == "C"
-
-
-def test_copy_without_sensitive_support_and_failures() -> None:
-    runner = _Runner(help_text="usage")
-    assert _clipboard(runner).copy(b"\x89PNG", "image/png") is False
-    assert "--sensitive" not in runner.calls[-1][0]
-    with pytest.raises(ClipboardError):
-        _clipboard(_Runner(returncode=1)).copy_text("x")
-    missing = Clipboard(environ={"WAYLAND_DISPLAY": "w"}, which=lambda name: None)
-    with pytest.raises(ClipboardError, match="not installed"):
-        missing.copy_text("x")
-
-
-def test_read_text_limits() -> None:
-    assert _clipboard(_Runner(stdout="äöü".encode())).read_text(100) == "äöü"
-    assert _clipboard(_Runner(stdout=b"x" * 11)).read_text(10) is None
-    assert _clipboard(_Runner(returncode=1)).read_text(10) == ""
-
-
-def test_wayland_socket_discovery(tmp_path) -> None:
-    import socket
-
-    runtime = tmp_path / "run"
-    runtime.mkdir()
-    with socket.socket(socket.AF_UNIX) as server:
-        server.bind(str(runtime / "wayland-1"))
-        env = helper_environment({"XDG_RUNTIME_DIR": str(runtime)})
-        assert env is not None and env["WAYLAND_DISPLAY"] == "wayland-1"
-    assert helper_environment({"XDG_RUNTIME_DIR": str(tmp_path / "none")}) is None
 
 
 # ---- settings form (Plugin1.GetConfig/SetConfig) ------------------------------------

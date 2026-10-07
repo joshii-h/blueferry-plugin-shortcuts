@@ -34,7 +34,8 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from typing import Protocol
 from urllib.parse import urlsplit
 
-from blueferry_shortcuts.clipboard import ClipboardError
+from blueferry_plugin_kit.clipboard import ClipboardError
+
 from blueferry_shortcuts.limits import ConnectionsPerAddress, DeadlineReader, deadline_rfile
 
 log = logging.getLogger(__name__)

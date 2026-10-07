@@ -21,9 +21,9 @@ import dbus.service
 from blueferry.plugin_api.config import ConfigError
 from blueferry.plugin_api.manifest import PluginManifest
 from blueferry.plugin_api.service import PluginCallError, PluginService
+from blueferry_plugin_kit.clipboard import Clipboard
 
 from blueferry_shortcuts import netaddr
-from blueferry_shortcuts.clipboard import Clipboard
 from blueferry_shortcuts.server import HttpsBridge
 from blueferry_shortcuts.settings import (
     Settings,
