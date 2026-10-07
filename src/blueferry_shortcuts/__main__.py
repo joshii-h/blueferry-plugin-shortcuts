@@ -11,8 +11,9 @@ from pathlib import Path
 
 from blueferry.plugin_api.manifest import ManifestError, default_directories
 from blueferry.plugin_api.service import run
+from blueferry_plugin_kit import netaddr
 
-from blueferry_shortcuts import PLUGIN_ID, load_manifest, manifest_text, netaddr
+from blueferry_shortcuts import PLUGIN_ID, load_manifest, manifest_text
 from blueferry_shortcuts.settings import SettingsError, SettingsStore
 from blueferry_shortcuts.tls import CertificateStore
 

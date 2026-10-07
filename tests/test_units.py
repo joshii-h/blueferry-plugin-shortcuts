@@ -1,4 +1,4 @@
-"""Manifest, settings, addresses, certificates and CLI."""
+"""Manifest, settings, certificates and CLI."""
 from __future__ import annotations
 
 import datetime as dt
@@ -7,13 +7,12 @@ import json
 import os
 import stat
 
-import pytest
 from blueferry.plugin_api import PLUGIN_INTERFACE
 from blueferry.plugin_api.testing import inline_service
 from cryptography import x509
 from fakehost import FakeHost
 
-from blueferry_shortcuts import PLUGIN_ID, load_manifest, manifest_text, netaddr
+from blueferry_shortcuts import PLUGIN_ID, load_manifest, manifest_text
 from blueferry_shortcuts import __main__ as cli
 from blueferry_shortcuts.server import check_url, parse_flag, parse_level, sniff_image
 from blueferry_shortcuts.service import ShortcutsService, battery_icon, mask_token
@@ -26,13 +25,6 @@ from blueferry_shortcuts.settings import (
 )
 from blueferry_shortcuts.surfaces import language
 from blueferry_shortcuts.tls import SERVER_DAYS, CertificateStore
-
-ROUTES = """Iface\tDestination\tGateway \tFlags\tRefCnt\tUse\tMetric\tMask\t\tMTU\tWindow\tIRTT
-wlan0\t00000000\t0101A8C0\t0003\t0\t0\t600\t00000000\t0\t0\t0
-enp5s0\t00000000\t0101A8C0\t0003\t0\t0\t100\t00000000\t0\t0\t0
-enp5s0\t0001A8C0\t00000000\t0001\t0\t0\t100\t00FFFFFF\t0\t0\t0
-"""
-
 
 # ---- manifest -------------------------------------------------------------------
 
@@ -97,58 +89,6 @@ def test_tokens_are_typeable_and_private(tmp_path) -> None:
 def test_mask_token() -> None:
     assert mask_token("abcd-efgh-jkmn") == "••••-••••-jkmn"
     assert mask_token("abcdefghjkmnpqrs") == "••••••••••••pqrs"
-
-
-# ---- addresses --------------------------------------------------------------------
-
-def test_default_route_picks_lowest_metric() -> None:
-    assert netaddr.default_route_interface(ROUTES) == "enp5s0"
-    assert netaddr.default_route_interface(ROUTES.splitlines()[0]) is None
-
-
-VPN_ROUTES = ROUTES + "wg0\t00000000\t00000000\t0001\t0\t0\t50\t00000000\t0\t0\t0\n"
-
-
-def test_a_vpn_default_route_is_passed_over_for_the_lan(tmp_path) -> None:
-    assert netaddr.default_route_interface(VPN_ROUTES) == "enp5s0"
-    assert netaddr.default_route_tunnel(VPN_ROUTES) == ("wg0", True)
-    assert netaddr.default_route_tunnel(ROUTES) is None
-    only = ROUTES.splitlines()[0] + "\n" + VPN_ROUTES.splitlines()[-1]
-    assert netaddr.default_route_interface(only) == "wg0"
-    assert netaddr.default_route_tunnel(only) == ("wg0", False)
-    # A custom name (NetworkManager WireGuard profile) is known by its type.
-    for name, kind in (("Immeditech", "65534"), ("enp5s0", "1"), ("vpn1", "512")):
-        (tmp_path / name).mkdir()
-        (tmp_path / name / "type").write_text(kind + "\n")
-    assert netaddr.is_tunnel("Immeditech", tmp_path) and netaddr.is_tunnel("vpn1", tmp_path)
-    assert not netaddr.is_tunnel("enp5s0", tmp_path)
-    assert netaddr.is_tunnel("tun0", tmp_path) and netaddr.is_tunnel("ppp0", tmp_path)
-
-
-@pytest.mark.parametrize("setting,allow_all,ok", [
-    ("", False, True), ("192.168.1.20", False, True), ("enp5s0", False, True),
-    ("0.0.0.0", False, False), ("::", False, False), ("0.0.0.0", True, True),
-    ("224.0.0.1", False, False), ("bad name!", False, False),
-])
-def test_listen_setting_validation(setting, allow_all, ok) -> None:
-    assert (netaddr.check_setting(setting, allow_all) is None) is ok
-
-
-def test_resolve() -> None:
-    addresses = {"enp5s0": "192.168.1.20"}
-    resolve = lambda s, a=False: netaddr.resolve(  # noqa: E731
-        s, a, default_interface=lambda: "enp5s0", address_of=addresses.get,
-    )
-    assert resolve("") == "192.168.1.20"
-    assert resolve("enp5s0") == "192.168.1.20"
-    assert resolve("10.0.0.5") == "10.0.0.5"
-    with pytest.raises(netaddr.AddressError):
-        resolve("wlan9")
-    with pytest.raises(netaddr.AddressError):
-        resolve("0.0.0.0")
-    assert resolve("0.0.0.0", True) == "0.0.0.0"
-    with pytest.raises(netaddr.AddressError, match="no default route"):
-        netaddr.resolve("", False, default_interface=lambda: None)
 
 
 # ---- certificates -------------------------------------------------------------------
