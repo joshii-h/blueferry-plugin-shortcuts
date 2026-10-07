@@ -14,7 +14,7 @@ import re
 from importlib import resources
 
 PLUGIN_ID = "io.weirdware.blueferry.shortcuts"
-__version__ = "0.2.0"
+__version__ = "0.2.1"
 
 CAPABILITIES = ("card", "notify")
 API_MINOR = 3
