@@ -1,4 +1,4 @@
-"""``blueferry-shortcuts serve|setup|show|status|forget``."""
+"""``blueferry-shortcuts serve|setup|show|status|networks|forget``."""
 from __future__ import annotations
 
 import argparse
@@ -14,7 +14,13 @@ from blueferry.plugin_api.service import run
 from blueferry_plugin_kit import netaddr
 
 from blueferry_shortcuts import PLUGIN_ID, load_manifest, manifest_text
-from blueferry_shortcuts.settings import SettingsError, SettingsStore, certificate_store
+from blueferry_shortcuts.netguard import NetworkManagerNetworks, Networks, approvable
+from blueferry_shortcuts.settings import (
+    SettingsError,
+    SettingsStore,
+    certificate_store,
+    probe_store,
+)
 
 ENTRY_POINT = "blueferry-shortcuts"
 # The endpoint must stay reachable for the iPhone; never idle out.
@@ -116,6 +122,52 @@ def show(store: SettingsStore | None = None) -> int:
     print(f"SHA-256:     {material.fingerprint}")
     print(f"Read PC clipboard: {'on' if settings.allow_clipboard_read else 'off'}; "
           f"images: {'on' if settings.accept_images else 'off'}")
+    if settings.allow_http:
+        names = ", ".join(name for _uuid, name in settings.http_networks) or "none"
+        print(f"Plain HTTP:  http://{shown}:{settings.http_port} in approved networks: {names}")
+    print('Easiest: "Set up iPhone" on the BlueFerry card shows a QR code for the iPhone.')
+    return 0
+
+
+def networks(action: str, name: str | None, store: SettingsStore | None = None,
+             source: Networks | None = None) -> int:
+    """List, approve or remove the networks approved for plain HTTP."""
+    store = store or SettingsStore()
+    try:
+        settings = store.load()
+    except (SettingsError, OSError) as error:
+        print(error, file=sys.stderr)
+        return 1
+    approved = dict(settings.http_networks)
+    if action == "list":
+        if not approved:
+            print("No network is approved for plain HTTP.")
+        for uuid, label in approved.items():
+            print(f"{label}\t{uuid}")
+        print(f"Plain HTTP is {'on' if settings.allow_http else 'off'}.")
+        return 0
+    if action == "allow-current":
+        current = (source or NetworkManagerNetworks()).current()
+        if current is None:
+            print("NetworkManager is not reachable; plain HTTP needs it.", file=sys.stderr)
+            return 1
+        chosen = approvable(current)
+        if not chosen:
+            print("This network cannot be approved (open Wi-Fi or no connection).",
+                  file=sys.stderr)
+            return 1
+        for network in chosen:
+            approved[network.uuid] = network.name
+            print(f"Approved {network.name}")
+    else:
+        matches = [uuid for uuid, label in approved.items() if name in (uuid, label)]
+        if not matches:
+            print(f"Not approved: {name}", file=sys.stderr)
+            return 1
+        for uuid in matches:
+            print(f"Removed {approved.pop(uuid)}")
+    store.save(settings.changed(http_networks=tuple(approved.items())))
+    print("The running plugin follows within a minute.")
     return 0
 
 
@@ -128,6 +180,10 @@ def main(argv: list[str] | None = None) -> int:
                         help="also start the endpoint with the desktop session")
     commands.add_parser("show", help="print URL, token and certificate fingerprint")
     commands.add_parser("status", help="show the settings")
+    nets = commands.add_parser("networks", help="networks approved for plain HTTP")
+    nets.add_argument("action", choices=("list", "allow-current", "remove"), nargs="?",
+                      default="list")
+    nets.add_argument("name", nargs="?", help="name or UUID to remove")
     commands.add_parser("forget", help="remove token, settings and certificates")
     args = parser.parse_args(argv)
     logging.basicConfig(level=logging.INFO, format="%(levelname)s %(name)s: %(message)s")
@@ -140,9 +196,14 @@ def main(argv: list[str] | None = None) -> int:
         return show()
     if args.command == "show":
         return show()
+    if args.command == "networks":
+        if args.action == "remove" and not args.name:
+            parser.error("networks remove needs a name or UUID")
+        return networks(args.action, args.name)
     if args.command == "forget":
         store = SettingsStore()
         store.forget()
+        probe_store(store.directory).forget()
         certificate_store(store.directory).forget()
         print("Removed the token, settings and certificates.")
         return 0

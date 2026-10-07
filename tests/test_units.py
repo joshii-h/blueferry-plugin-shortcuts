@@ -231,3 +231,24 @@ def test_test_connection_checks_without_storing(tmp_path, caplog) -> None:
     assert service._bridge.started == [("127.0.0.1", 47801)]   # nothing restarted
     host.assert_never_sent(secret, store.token())
     assert secret not in caplog.text and "127.0.0.1" not in caplog.text
+
+
+def test_cli_networks(tmp_path, capsys) -> None:
+    from fakenet import CAFE_OPEN, HOME, TWIN
+
+    store = SettingsStore(tmp_path / "c", tmp_path / "s")
+    store.save(Settings(allow_http=True))
+    assert cli.networks("list", None, store) == 0
+    assert "No network" in capsys.readouterr().out
+    assert cli.networks("allow-current", None, store, FakeNetworks([HOME])) == 0
+    assert cli.networks("allow-current", None, store, FakeNetworks([CAFE_OPEN])) == 1
+    assert cli.networks("allow-current", None, store, FakeNetworks(available=False)) == 1
+    assert cli.networks("allow-current", None, store, FakeNetworks([TWIN])) == 0
+    assert len(store.load().http_networks) == 2
+    assert cli.networks("remove", TWIN.uuid, store) == 0
+    assert store.load().http_networks == ((HOME.uuid, "Zuhause"),)
+    assert cli.networks("remove", "Nirgendwo", store) == 1
+    capsys.readouterr()
+    assert cli.networks("list", None, store) == 0
+    out = capsys.readouterr().out
+    assert HOME.uuid in out and "Plain HTTP is on" in out
