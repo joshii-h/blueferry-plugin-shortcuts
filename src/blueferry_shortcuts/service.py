@@ -30,13 +30,33 @@ from blueferry_plugin_kit.clipboard import Clipboard
 from blueferry_plugin_kit.configtest import failed, passed
 from blueferry_plugin_kit.lanserver.tls import CertificateStore, Material
 
+from blueferry_shortcuts import pages
+from blueferry_shortcuts.localpage import LocalPage
+from blueferry_shortcuts.netguard import (
+    Decision,
+    Network,
+    NetworkManagerNetworks,
+    Networks,
+    approvable,
+    decide,
+)
+from blueferry_shortcuts.pairing import (
+    SetupSessions,
+    ca_common_name,
+    mobileconfig,
+    qr_svg,
+)
 from blueferry_shortcuts.server import HttpsBridge
 from blueferry_shortcuts.settings import (
+    DEFAULT_HTTP_PORT,
+    DEFAULT_SHORTCUT_URL,
     Settings,
     SettingsError,
     SettingsStore,
     certificate_store,
     new_token,
+    probe_store,
+    valid_shortcut_url,
     valid_token,
 )
 from blueferry_shortcuts.surfaces import (
@@ -57,6 +77,14 @@ REVEAL_SECONDS = 120
 MAINTAIN_SECONDS = 60
 MAX_ARGS = 4096
 PROBE_TIMEOUT_S = 5
+# Keep "last connected" on disk at most this often.
+SEEN_SAVE_SECONDS = 60
+# TLS alerts that mean "this client does not trust the certificate".
+_CERT_REASONS = ("unknown_ca", "certificate_unknown", "bad_certificate")
+
+
+def _thread(work: Callable[[], None]) -> None:
+    threading.Thread(target=work, name="blueferry-shortcuts-work", daemon=True).start()
 
 
 def _size(count: int) -> str:
@@ -112,6 +140,8 @@ class ShortcutsService(PluginService):
         route_tunnel: Callable[[], tuple[str, bool] | None] = netaddr.default_route_tunnel,
         lang: str | None = None,
         wall_clock: Callable[[], float] = time.time,
+        networks: Networks | None = None,
+        run_async: Callable[[Callable[[], None]], None] = _thread,
         **kwargs: Any,
     ) -> None:
         super().__init__(manifest, bus, **kwargs)
@@ -122,8 +152,20 @@ class ShortcutsService(PluginService):
         self._resolve = resolve
         self._local_addresses = local_addresses
         self._route_tunnel = route_tunnel
-        self._t = texts(lang or language())
+        self._lang = lang or language()
+        self._t = texts(self._lang)
         self._now = wall_clock
+        self._networks = networks or NetworkManagerNetworks()
+        self._run_async = run_async
+        self._probe_certificates = probe_store(self._store.directory)
+        self._sessions = SetupSessions()
+        self._page = LocalPage(self._render_pc_page)
+        self._progress = {"opened": False, "trusted": False, "tested": False}
+        self._decision = Decision(False, "off")
+        self._http_lock = threading.Lock()
+        self._seen: dict[str, float] = {}       # "at", "secure_at" (epoch)
+        self._seen_saved = 0.0
+        self._cert_failure_at: float | None = None
         self._lock = threading.RLock()
         self._settings = Settings()
         self._token = ""
@@ -138,9 +180,15 @@ class ShortcutsService(PluginService):
         self._battery: dict[str, object] | None = None
         self._stopping = threading.Event()
         self._cert_mtime: float | None = None
-        state = self._store.load_state().get("battery")
+        saved = self._store.load_state()
+        state = saved.get("battery")
         if isinstance(state, dict) and {"level", "charging", "at"} <= state.keys():
             self._battery = state
+        seen = saved.get("seen")
+        if isinstance(seen, dict):
+            self._seen = {key: float(value) for key, value in seen.items()
+                          if key in ("at", "secure_at") and isinstance(value, (int, float))
+                          and not isinstance(value, bool)}
 
     # ---- lifecycle -----------------------------------------------------------
 
@@ -165,6 +213,8 @@ class ShortcutsService(PluginService):
             if not repeated:  # maintain() retries every minute
                 log.warning("HTTPS endpoint not started: %s", reason)
         self._card_changed()
+        # NetworkManager answers over D-Bus: never on the main loop.
+        self._run_async(self.update_plain_http)
 
     def start_maintenance(self) -> None:
         def loop() -> None:
@@ -175,9 +225,16 @@ class ShortcutsService(PluginService):
                     log.debug("maintenance failed", exc_info=True)
 
         threading.Thread(target=loop, name="blueferry-shortcuts-maintain", daemon=True).start()
+        self._networks.watch(lambda: self._run_async(self.update_plain_http))
 
     def maintain(self) -> None:
-        """Follow a changed interface address and renew the certificate."""
+        """Follow a changed interface address and network, renew the
+        certificate, end the setup helpers when they are no longer needed."""
+        if not self._sessions.active():
+            self._bridge.stop_probe()
+        self._page.stop_if_idle()
+        self._reload_networks()
+        self.update_plain_http()
         with self._lock:
             settings, host = self._settings, self._host
         try:
@@ -201,6 +258,7 @@ class ShortcutsService(PluginService):
     def stop(self) -> None:
         self._stopping.set()
         self._bridge.stop()
+        self._page.stop()
         with self._lock:
             if self._reveal_timer is not None:
                 self._reveal_timer.cancel()
@@ -294,11 +352,209 @@ class ShortcutsService(PluginService):
                 charging = bool(self._battery and self._battery.get("charging"))
             battery = {"level": level, "charging": charging, "at": int(self._now())}
             self._battery = battery
-        try:
-            self._store.save_state({"battery": battery})
-        except (SettingsError, OSError):
-            log.debug("could not keep the battery state")
+        self._save_state()
         self._card_changed()
+
+    def on_authorized(self, secure: bool) -> None:
+        now = self._now()
+        with self._lock:
+            self._seen["at"] = now
+            if secure:
+                self._seen["secure_at"] = now
+            save = now - self._seen_saved >= SEEN_SAVE_SECONDS
+            if save:
+                self._seen_saved = now
+        if save:
+            self._save_state()
+            self._card_changed()
+
+    def on_handshake_failed(self, reason: str) -> None:
+        if not any(part in reason for part in _CERT_REASONS):
+            return
+        with self._lock:
+            first = self._cert_failure_at is None
+            self._cert_failure_at = self._now()
+        if first:
+            self._card_changed()
+
+    def on_probe(self) -> None:
+        with self._lock:
+            known = self._progress["trusted"]
+            self._progress["trusted"] = True
+            self._cert_failure_at = None
+        if not known:
+            self._card_changed()
+
+    def ca_profile(self, lang: str) -> bytes:
+        with self._lock:
+            material = self._material
+        if material is None:
+            return b""
+        return mobileconfig(material.ca_pem, material.fingerprint, lang)
+
+    def redeem_setup(self, nonce: str) -> str | None:
+        session = self._sessions.redeem(nonce)
+        if session is not None:
+            with self._lock:
+                self._progress["opened"] = True
+            log.info("setup link opened on a phone")
+            self._card_changed()
+        return session
+
+    def setup_session_valid(self, session: str) -> bool:
+        return self._sessions.valid(session)
+
+    def setup_view(self, secure: bool) -> pages.SetupView:
+        secure_url = self.url()
+        plain_url = self.plain_url()
+        with self._lock:
+            material, token, settings = self._material, self._token, self._settings
+            host = self._host
+        probe = self._bridge.probe_address
+        probe_url = ""
+        if probe is not None and host:
+            probe_url = f"{self._url_for(host, probe[1])}/probe"
+        return pages.SetupView(
+            address=secure_url if secure or not plain_url else plain_url,
+            secure_address=secure_url,
+            token=token,
+            ca_name=ca_common_name(material.ca_pem) if material else "",
+            fingerprint=material.fingerprint if material else "",
+            probe_url=probe_url,
+            shortcut_url=settings.shortcut_url or DEFAULT_SHORTCUT_URL,
+            plain_http=bool(plain_url),
+            clipboard_read=settings.allow_clipboard_read,
+        )
+
+    def on_setup_test(self) -> None:
+        with self._lock:
+            self._progress["tested"] = True
+        self._notify(self._t["connected_title"], self._t["connected_body"], "phone")
+        self._card_changed()
+
+    def _save_state(self) -> None:
+        with self._lock:
+            state: dict[str, object] = {"seen": dict(self._seen)}
+            if self._battery is not None:
+                state["battery"] = self._battery
+        try:
+            self._store.save_state(state)
+        except (SettingsError, OSError):
+            log.debug("could not keep the state")
+
+    # ---- setup -----------------------------------------------------------------
+
+    def begin_setup(self) -> dict[str, object]:
+        """Card action "Set up iPhone": a new link, the probe, the PC page."""
+        url = self.url()
+        if not url:
+            with self._lock:
+                error = self._error
+            return result(False, self._t["setup_needs_endpoint"].format(reason=error or "…"))
+        self._new_link()
+        try:
+            page = self._page.url()
+        except OSError as error:
+            return result(False, _reason(error))
+        return result(True, None, page)
+
+    def _new_link(self) -> None:
+        self._sessions.nonce(renew=True)
+        with self._lock:
+            self._progress = {"opened": False, "trusted": False, "tested": False}
+        self._start_probe()
+
+    def _start_probe(self) -> None:
+        with self._lock:
+            host, port = self._host, self._settings.port
+        if not host or port >= 65535:
+            return
+        try:
+            material = self._probe_certificates.ensure(self._cert_addresses(host))
+            self._bridge.start_probe(host, port + 1, material.server_context())
+        except (OSError, ValueError) as error:
+            log.info("trust check not available: %s", _reason(error))
+
+    def _render_pc_page(self, _accept_language: str, renew: bool) -> tuple[bytes, str]:
+        if renew:
+            self._new_link()
+        url = self.url()
+        with self._lock:
+            progress, error, decision = dict(self._progress), self._error, self._decision
+        if not url:
+            view = pages.PcView("", "", "", error or "…", "", **progress)
+            return pages.pc_page(self._lang, view)
+        if not self._sessions.pending() and not progress["opened"]:
+            self._new_link()           # expired unused: offer a fresh one
+        if not self._sessions.pending():
+            return pages.pc_page(self._lang, pages.PcView("", "", "", "", "", **progress))
+        if self._bridge.probe_address is None:
+            self._start_probe()
+        nonce, left = self._sessions.nonce()
+        plain = self.plain_url()
+        link = f"{plain or url}/setup/{nonce}"
+        until = time.strftime("%H:%M", time.localtime(time.time() + left))
+        view = pages.PcView(link, qr_svg(link), until, "", decision.name if plain else "",
+                            **progress)
+        return pages.pc_page(self._lang, view)
+
+    # ---- plain HTTP (opt-in, approved networks) -----------------------------------
+
+    def plain_url(self) -> str:
+        address = self._bridge.plain_address
+        if address is None:
+            return ""
+        return "http" + self._url_for(address[0], address[1])[len("https"):]
+
+    def _reload_networks(self) -> None:
+        """Pick up approvals changed through the CLI."""
+        try:
+            stored = self._store.load()
+        except (SettingsError, OSError):
+            return
+        with self._lock:
+            self._settings = self._settings.changed(http_networks=stored.http_networks)
+
+    def update_plain_http(self) -> None:
+        """Worker thread: open or close the plain-HTTP listener for the network."""
+        with self._http_lock:
+            with self._lock:
+                settings, host = self._settings, self._host
+            current = self._networks.current() if settings.allow_http else None
+            decision = decide(settings.allow_http, settings.http_networks, current)
+            if decision.active and host:
+                wanted = (host, settings.http_port)
+                if self._bridge.plain_address != wanted:
+                    try:
+                        self._bridge.start_plain(host, settings.http_port)
+                        log.info("plain HTTP listening on port %d", settings.http_port)
+                    except OSError as error:
+                        decision = Decision(False, "bind", _reason(error))
+            if not (decision.active and host) and self._bridge.plain_address is not None:
+                self._bridge.stop_plain()
+                log.info("plain HTTP stopped (%s)", decision.reason)
+            with self._lock:
+                changed, self._decision = decision != self._decision, decision
+            if changed:
+                self._card_changed()
+
+    def approve_current_network(self) -> list[Network]:
+        """Approve the current default-route networks (never open Wi-Fi)."""
+        current = self._networks.current()
+        chosen = approvable(current)
+        if not chosen:
+            return []
+        with self._lock:
+            settings = self._settings
+        approved = dict(settings.http_networks)
+        for network in chosen:
+            approved[network.uuid] = network.name
+        new = settings.changed(http_networks=tuple(approved.items()))
+        self._store.save(new)
+        with self._lock:
+            self._settings = new
+        self.update_plain_http()
+        return chosen
 
     # ---- signals ---------------------------------------------------------------
 
@@ -340,11 +596,17 @@ class ShortcutsService(PluginService):
         subtitle = (t["listening"].format(url=url) if url
                     else t["stopped"].format(reason=error or "…"))
         toggle = (Action("hide_setup", t["hide_setup"], "view-hidden") if show
-                  else Action("show_setup", t["show_setup"], "view-visible", "primary"))
+                  else Action("show_setup", t["show_setup"], "view-visible"))
         items.append(CardItem(
             "bridge", "phone" if url else "dialog-warning", t["bridge"], subtitle,
-            (toggle, Action("new_token", t["new_token"], "view-refresh")),
+            (Action("setup_iphone", t["setup_iphone"], "smartphone", "primary"), toggle,
+             Action("new_token", t["new_token"], "view-refresh")),
         ))
+        if url:
+            items.append(self._state_item())
+        plain = self._plain_item()
+        if plain is not None:
+            items.append(plain)
         hint = self._vpn_hint()
         if hint is not None:
             items.append(hint)
@@ -361,12 +623,58 @@ class ShortcutsService(PluginService):
                 items.append(CardItem(
                     "setup_fingerprint", "security-high", t["fingerprint"], material.fingerprint,
                 ))
-                if url:
-                    items.append(CardItem(
-                        "setup_ca", "application-certificate", t["ca"],
-                        t["ca_hint"].format(url=url),
-                    ))
         return items
+
+    def _state_item(self) -> CardItem:
+        """Not set up / certificate probably missing / last connected."""
+        t = self._t
+        with self._lock:
+            seen, failure = dict(self._seen), self._cert_failure_at
+        if failure is not None and failure > seen.get("secure_at", 0.0):
+            return CardItem("state", "security-low", t["state_cert"],
+                            t["state_cert_hint"].format(time=self._when(int(failure))))
+        if "at" not in seen:
+            return CardItem("state", "dialog-information", t["state_new"], t["state_new_hint"])
+        secure = seen.get("secure_at") == seen["at"]
+        return CardItem(
+            "state", "network-wireless-encrypted" if secure else "network-wireless",
+            t["state_seen"].format(ago=self._ago(seen["at"])),
+            t["seen_secure" if secure else "seen_plain"],
+        )
+
+    def _plain_item(self) -> CardItem | None:
+        t = self._t
+        with self._lock:
+            allowed, decision = self._settings.allow_http, self._decision
+        if not allowed:
+            return None
+        if decision.active:
+            return CardItem("plain", "security-medium",
+                            t["plain_active"].format(name=decision.name),
+                            t["plain_active_hint"].format(url=self.plain_url()))
+        if decision.reason == "foreign":
+            return CardItem(
+                "plain", "security-high", t["plain_foreign"],
+                t["plain_foreign_hint"].format(name=decision.name),
+                (Action("allow_network", t["allow_network"], "network-wireless"),),
+            )
+        key = {"open-wifi": "plain_open", "no-nm": "plain_no_nm",
+               "no-network": "plain_no_network", "bind": "plain_bind"}.get(decision.reason)
+        if key is None:      # "off": not evaluated yet
+            return None
+        return CardItem("plain", "security-high", t[key],
+                        t[key + "_hint"].format(name=decision.name))
+
+    def _ago(self, epoch: float) -> str:
+        t = self._t
+        seconds = max(0, int(self._now() - epoch))
+        if seconds < 60:
+            return t["just_now"]
+        if seconds < 3600:
+            return t["min_ago"].format(n=seconds // 60)
+        if seconds < 24 * 3600:
+            return t["h_ago"].format(n=seconds // 3600)
+        return t["on_date"].format(date=self._when(int(epoch)))
 
     def _vpn_hint(self) -> CardItem | None:
         """Warn when a VPN carries the default route (automatic choice only)."""
@@ -397,6 +705,18 @@ class ShortcutsService(PluginService):
             with self._lock:
                 url = self._links.get(action_id)
             return result(True, None, url) if url else result(False, t["link_gone"])
+        if item_id == "bridge" and action_id == "setup_iphone":
+            return self.begin_setup()
+        if item_id == "plain" and action_id == "allow_network":
+            try:
+                chosen = self.approve_current_network()
+            except (SettingsError, OSError) as error:
+                return result(False, str(error))
+            if not chosen:
+                return result(False, t["allow_network_none"])
+            self._card_changed()
+            return result(True, t["allow_network_done"].format(
+                name=", ".join(network.name for network in chosen)))
         if item_id == "bridge" and action_id in ("show_setup", "hide_setup"):
             with self._lock:
                 self._show_setup = action_id == "show_setup"
@@ -474,6 +794,10 @@ class ShortcutsService(PluginService):
             "token": bool(token),
             "allow_clipboard_read": settings.allow_clipboard_read,
             "accept_images": settings.accept_images,
+            "allow_http": settings.allow_http,
+            "http_port": settings.http_port,
+            "http_networks": ", ".join(name for _uuid, name in settings.http_networks),
+            "shortcut_url": settings.shortcut_url,
         }
 
     def apply_config(self, values: dict[str, object]) -> None:
@@ -486,15 +810,37 @@ class ShortcutsService(PluginService):
         if token is not None and not valid_token(str(token)):
             raise ConfigError("token", "must be 16 to 128 printable characters without spaces")
         port = values.get("port")
+        port = port if isinstance(port, int) and not isinstance(port, bool) else 47801
+        http_port = values.get("http_port")
+        http_port = (http_port if isinstance(http_port, int) and not isinstance(http_port, bool)
+                     else DEFAULT_HTTP_PORT)
+        allow_http = values.get("allow_http") is True
+        if allow_http and http_port in (port, port + 1):
+            raise ConfigError("http_port", "use a port other than the HTTPS port and the next one")
+        shortcut_url = str(values.get("shortcut_url") or "").strip()
+        if not valid_shortcut_url(shortcut_url):
+            raise ConfigError("shortcut_url", "must be an iCloud shortcut link "
+                              "(https://www.icloud.com/shortcuts/…)")
+        with self._lock:
+            old, host = self._settings, self._host
+        networks = old.http_networks
+        if values.get("http_networks") is not None:
+            # The field lists the approved networks; deleting a name removes it.
+            kept = {part.strip() for part in str(values["http_networks"]).split(",")}
+            networks = tuple((uuid, name) for uuid, name in networks if name in kept)
+        if allow_http and not old.allow_http:
+            networks = self._approve_on_enable(networks)
         new = Settings(
             bind_address=bind,
             allow_all_interfaces=allow_all,
-            port=port if isinstance(port, int) and not isinstance(port, bool) else 47801,
+            port=port,
             allow_clipboard_read=values.get("allow_clipboard_read") is True,
             accept_images=values.get("accept_images") is True,
+            allow_http=allow_http,
+            http_port=http_port,
+            http_networks=networks,
+            shortcut_url=shortcut_url,
         )
-        with self._lock:
-            old, host = self._settings, self._host
         if (new.bind_address, new.allow_all_interfaces, new.port) != (
             old.bind_address, old.allow_all_interfaces, old.port,
         ) or not host:
@@ -519,7 +865,25 @@ class ShortcutsService(PluginService):
             self._settings = new
             if token is not None:
                 self._token = str(token)
+        self.update_plain_http()
         self._card_changed()
+
+    def _approve_on_enable(
+        self, networks: tuple[tuple[str, str], ...],
+    ) -> tuple[tuple[str, str], ...]:
+        """Turning plain HTTP on approves the network the PC is in now."""
+        current = self._networks.current()
+        if current is None:
+            raise ConfigError("allow_http", "needs NetworkManager to recognise the home network")
+        chosen = approvable(current)
+        if not chosen:
+            if any(network.open_wifi for network in current):
+                raise ConfigError("allow_http", "this is an open Wi-Fi; it is never approved")
+            raise ConfigError("allow_http", "no network connection to approve")
+        approved = dict(networks)
+        for network in chosen:
+            approved[network.uuid] = network.name
+        return tuple(approved.items())
 
     def test_config(self, values: dict[str, object]) -> ConfigTestResult:
         """Worker thread. "Test connection": nothing is stored or restarted.

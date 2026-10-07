@@ -9,7 +9,8 @@ client cannot block the accept loop. Nothing here logs request contents,
 and nothing is forwarded anywhere: requests only reach the desktop
 clipboard and BlueFerry's card and notifications.
 
-Endpoints (all but ``/ca.crt`` need ``Authorization: Bearer <token>``):
+Endpoints (all but ``/``, ``/ca.crt``, ``/ca.mobileconfig`` and the setup
+pages need ``Authorization: Bearer <token>``):
 
 - ``POST /clipboard``: ``{"text": "…"}``, ``text/plain`` or (opt-in) an image
 - ``GET /clipboard``: the PC clipboard as ``text/plain`` (opt-in)
@@ -17,10 +18,24 @@ Endpoints (all but ``/ca.crt`` need ``Authorization: Bearer <token>``):
 - ``POST /battery``: ``{"level": 87, "charging": true}`` (``charging`` optional:
   without it the last known state stays)
 - ``GET /ca.crt``: the public CA certificate, to install on the iPhone
+- ``GET /ca.mobileconfig``: the same as a configuration profile
+- ``GET /``: a plain page pointing to "Set up iPhone" in BlueFerry
+- ``GET /setup/<nonce>``: spends a one-time link, sets the setup session
+  cookie and redirects to ``GET /setup``, the setup page (session only)
+- ``POST /setup/test``: "Test now" on the setup page (session only)
+
+The same routes can also be served over plain HTTP (opt-in, approved
+networks only; see :mod:`.netguard`): that server drops connections from
+addresses outside private and link-local ranges, and ``GET /clipboard``
+is always refused there. A third, short-lived HTTPS server with its own
+certificate answers ``GET /probe`` while a setup runs, so the setup page
+can tell whether the iPhone really trusts the CA (Safari's "visit this
+website" exception is bound to the main server's certificate).
 """
 from __future__ import annotations
 
 import hmac
+import ipaddress
 import json
 import logging
 import math
@@ -39,6 +54,9 @@ from blueferry_plugin_kit.lanserver import (
     serve_in_thread,
 )
 from blueferry_plugin_kit.lanserver import RateLimiter as _KitRateLimiter
+
+from blueferry_shortcuts import pages
+from blueferry_shortcuts.pairing import cookie_value, set_cookie
 
 log = logging.getLogger(__name__)
 
@@ -66,6 +84,10 @@ _IMAGE_MAGIC = (
     (b"GIF87a", "image/gif"),
     (b"GIF89a", "image/gif"),
 )
+_PRIVATE_NETWORKS = tuple(ipaddress.ip_network(n) for n in (
+    "10.0.0.0/8", "172.16.0.0/12", "192.168.0.0/16", "169.254.0.0/16", "127.0.0.0/8",
+    "fc00::/7", "fe80::/10", "::1/128",
+))
 _TRUE = {"true", "yes", "ja", "1", "on"}
 _FALSE = {"false", "no", "nein", "0", "off", ""}
 
@@ -82,6 +104,25 @@ class Endpoints(Protocol):
     def read_clipboard(self, limit: int) -> str | None: ...
     def on_link(self, url: str) -> None: ...
     def on_battery(self, level: int, charging: bool | None) -> None: ...
+    def on_authorized(self, secure: bool) -> None: ...
+    def on_handshake_failed(self, reason: str) -> None: ...
+    def on_probe(self) -> None: ...
+    def ca_profile(self, lang: str) -> bytes: ...
+    def redeem_setup(self, nonce: str) -> str | None: ...
+    def setup_session_valid(self, session: str) -> bool: ...
+    def setup_view(self, secure: bool) -> pages.SetupView: ...
+    def on_setup_test(self) -> None: ...
+
+
+def private_client(address: str) -> bool:
+    """Whether a peer address is private, unique-local, link-local or loopback."""
+    try:
+        ip = ipaddress.ip_address(address.split("%", 1)[0])
+    except ValueError:
+        return False
+    if isinstance(ip, ipaddress.IPv6Address) and ip.ipv4_mapped is not None:
+        ip = ip.ipv4_mapped
+    return any(ip in network for network in _PRIVATE_NETWORKS)
 
 
 class RateLimiter(_KitRateLimiter):
@@ -157,18 +198,25 @@ class _Server(HardenedHTTPServer):
     # trust the CA yet), which carries the TLS reason only.
     log = log
 
-    def __init__(self, address, endpoints: Endpoints, context: ssl.SSLContext,
-                 limiter: RateLimiter) -> None:
+    def __init__(self, address, endpoints: Endpoints, context: ssl.SSLContext | None,
+                 limiter: RateLimiter, handler: type | None = None) -> None:
         self.endpoints = endpoints
         self.limiter = limiter
+        # Plain HTTP only from private and link-local addresses.
+        self.secure = context is not None
         super().__init__(
-            address, _Handler, context=context, max_connections=MAX_CONNECTIONS,
+            address, handler or _Handler, context=context, max_connections=MAX_CONNECTIONS,
             max_per_address=MAX_CONNECTIONS_PER_ADDRESS,
+            allowed=None if self.secure else private_client,
         )
 
     def handshake_timeout(self) -> float:
         # Read at runtime, so the deadline can be changed (tests do).
         return REQUEST_DEADLINE_S
+
+    def handshake_failed(self, reason: str, client_address) -> None:
+        super().handshake_failed(reason, client_address)
+        self.endpoints.on_handshake_failed(reason)
 
 
 class _Handler(DeadlineRequestHandler):
@@ -202,6 +250,14 @@ class _Handler(DeadlineRequestHandler):
     def _json(self, status: int, value: dict[str, object],
               extra: dict[str, str] | None = None) -> None:
         self._send(status, json.dumps(value).encode(), "application/json", extra)
+
+    def _html(self, status: int, body: bytes, policy: str,
+              extra: dict[str, str] | None = None) -> None:
+        headers = {"Content-Security-Policy": policy, **pages.SECURITY_HEADERS, **(extra or {})}
+        self._send(status, body, "text/html; charset=utf-8", headers)
+
+    def _lang(self) -> str:
+        return pages.language(self.headers.get("Accept-Language", "")[:200])
 
     def _authorized(self) -> bool:
         header = self.headers.get("Authorization", "")
@@ -246,6 +302,23 @@ class _Handler(DeadlineRequestHandler):
             self._send(200, self.server.endpoints.ca_pem(), "application/x-x509-ca-cert",
                        {"Content-Disposition": 'attachment; filename="blueferry-shortcuts.crt"'})
             return
+        if path == "/ca.mobileconfig" and method in ("GET", "HEAD"):
+            self._send(200, self.server.endpoints.ca_profile(self._lang()),
+                       "application/x-apple-aspen-config", {
+                           "Content-Disposition":
+                               'attachment; filename="BlueFerry.mobileconfig"',
+                       })
+            return
+        if path == "/" and method in ("GET", "HEAD"):
+            self._html(200, pages.home_page(self._lang()), pages.csp(script=False))
+            return
+        if path == "/setup" or path.startswith("/setup/"):
+            self._setup(path, method, client)
+            return
+        if path == "/clipboard" and method == "GET" and not self.server.secure:
+            # Reading the PC clipboard never travels unencrypted.
+            self._json(403, {"error": "clipboard-read-needs-https"})
+            return
         routes = {
             "/clipboard": {"GET": self._get_clipboard, "POST": self._post_clipboard},
             "/link": {"POST": self._post_link},
@@ -258,6 +331,7 @@ class _Handler(DeadlineRequestHandler):
             self.server.limiter.failed(client)
             self._json(401, {"error": "unauthorized"}, {"WWW-Authenticate": "Bearer"})
             return
+        self.server.endpoints.on_authorized(self.server.secure)
         handler = routes[path].get(method)
         if handler is None:
             self._json(405, {"error": "method-not-allowed"},
@@ -269,6 +343,60 @@ class _Handler(DeadlineRequestHandler):
             self._json(error.status, {"error": error.token})
         except ClipboardError:
             self._json(503, {"error": "clipboard-unavailable"})
+
+    # ---- setup ---------------------------------------------------------------
+
+    def _setup(self, path: str, method: str, client: str) -> None:
+        endpoints = self.server.endpoints
+        lang = self._lang()
+        session = cookie_value(self.headers.get("Cookie", ""))
+        if path == "/setup/test":
+            if method != "POST":
+                self._json(405, {"error": "method-not-allowed"}, {"Allow": "POST"})
+                return
+            # Same-origin fetch only: the custom header forces a CORS preflight
+            # for any other origin, which this server never answers.
+            if self.headers.get("X-BlueFerry-Setup") != "1" or not self._same_origin():
+                self._json(403, {"error": "forbidden"})
+                return
+            if not endpoints.setup_session_valid(session):
+                self.server.limiter.failed(client)
+                self._json(401, {"error": "setup-expired"})
+                return
+            endpoints.on_authorized(self.server.secure)
+            endpoints.on_setup_test()
+            self._json(200, {"ok": True})
+            return
+        if method not in ("GET", "HEAD"):
+            self._json(405, {"error": "method-not-allowed"}, {"Allow": "GET"})
+            return
+        if path == "/setup":
+            if not endpoints.setup_session_valid(session):
+                if session:
+                    self.server.limiter.failed(client)
+                self._html(403, pages.expired_page(lang), pages.csp(script=False))
+                return
+            body, policy = pages.setup_page(lang, endpoints.setup_view(self.server.secure))
+            self._html(200, body, policy)
+            return
+        nonce = path[len("/setup/"):]
+        created = endpoints.redeem_setup(nonce) if 0 < len(nonce) <= 64 else None
+        if created is None:
+            self.server.limiter.failed(client)
+            self._html(404, pages.expired_page(lang), pages.csp(script=False))
+            return
+        self._send(303, b"", "text/plain", {
+            "Location": "/setup", "Set-Cookie": set_cookie(created, self.server.secure),
+            "Referrer-Policy": "no-referrer",
+        })
+
+    def _same_origin(self) -> bool:
+        origin = self.headers.get("Origin")
+        if origin is None:
+            return True
+        host = self.headers.get("Host", "")
+        scheme = "https" if self.server.secure else "http"
+        return bool(host) and origin == f"{scheme}://{host}"
 
     # ---- endpoints ---------------------------------------------------------
 
@@ -338,43 +466,124 @@ class _Handler(DeadlineRequestHandler):
         self._json(200, {"ok": True})
 
 
+class _ProbeHandler(DeadlineRequestHandler):
+    """``GET /probe`` only: answers when the TLS handshake succeeded."""
+
+    log = log
+    server: _Server
+    server_version = "BlueFerryShortcuts"
+    timeout = CONNECTION_TIMEOUT_S
+
+    def request_deadline(self) -> float:
+        return REQUEST_DEADLINE_S
+
+    def do_GET(self) -> None:
+        self.close_connection = True
+        if not self.server.limiter.admit(str(self.client_address[0])):
+            status = 429
+        elif urlsplit(self.path).path == "/probe":
+            self.server.endpoints.on_probe()
+            status = 204
+        else:
+            status = 404
+        self.send_response(status)
+        self.send_header("Content-Length", "0")
+        self.send_header("Cache-Control", "no-store")
+        self.send_header("Connection", "close")
+        self.end_headers()
+
+
+class _Running:
+    """One server on its own thread."""
+
+    def __init__(self, server: _Server, name: str) -> None:
+        self.server = server
+        self.thread = serve_in_thread(server, name)
+
+    @property
+    def address(self) -> tuple[str, int]:
+        return self.server.server_address[:2]
+
+    def stop(self) -> None:
+        self.server.shutdown()
+        self.server.server_close()
+        self.thread.join(timeout=5)
+
+
 class HttpsBridge:
-    """Starts and stops the server on its own thread."""
+    """Starts and stops the HTTPS server, the opt-in plain-HTTP server and
+    the trust probe, each on its own thread. They share one rate limiter."""
 
     def __init__(self, endpoints: Endpoints, limiter: RateLimiter | None = None) -> None:
         self._endpoints = endpoints
         self._limiter = limiter or RateLimiter()
-        self._server: _Server | None = None
-        self._thread: threading.Thread | None = None
+        self._main: _Running | None = None
+        self._plain: _Running | None = None
+        self._probe: _Running | None = None
         self._lock = threading.Lock()
 
     @property
     def address(self) -> tuple[str, int] | None:
-        server = self._server
-        return server.server_address[:2] if server is not None else None
+        running = self._main
+        return running.address if running is not None else None
+
+    @property
+    def plain_address(self) -> tuple[str, int] | None:
+        running = self._plain
+        return running.address if running is not None else None
+
+    @property
+    def probe_address(self) -> tuple[str, int] | None:
+        running = self._probe
+        return running.address if running is not None else None
 
     def start(self, host: str, port: int, context: ssl.SSLContext) -> None:
         """Bind and serve; raise OSError when the address is unusable."""
         with self._lock:
-            self._stop_locked()
+            if self._main is not None:
+                self._main, old = None, self._main
+                old.stop()
             server = _Server((host, port), self._endpoints, context, self._limiter)
-            thread = serve_in_thread(server, "blueferry-shortcuts-https")
-            self._server, self._thread = server, thread
+            self._main = _Running(server, "blueferry-shortcuts-https")
+
+    def start_plain(self, host: str, port: int) -> None:
+        """Plain HTTP (private peers only); raise OSError when unusable."""
+        with self._lock:
+            if self._plain is not None:
+                self._plain, old = None, self._plain
+                old.stop()
+            server = _Server((host, port), self._endpoints, None, self._limiter)
+            self._plain = _Running(server, "blueferry-shortcuts-http")
+
+    def start_probe(self, host: str, port: int, context: ssl.SSLContext) -> None:
+        with self._lock:
+            if self._probe is not None:
+                self._probe, old = None, self._probe
+                old.stop()
+            server = _Server((host, port), self._endpoints, context, self._limiter,
+                             handler=_ProbeHandler)
+            self._probe = _Running(server, "blueferry-shortcuts-probe")
 
     def reload_context(self, context: ssl.SSLContext) -> None:
         with self._lock:
-            if self._server is not None:
-                self._server.ssl_context = context
+            if self._main is not None:
+                self._main.server.ssl_context = context
+
+    def stop_plain(self) -> None:
+        with self._lock:
+            running, self._plain = self._plain, None
+        if running is not None:
+            running.stop()
+
+    def stop_probe(self) -> None:
+        with self._lock:
+            running, self._probe = self._probe, None
+        if running is not None:
+            running.stop()
 
     def stop(self) -> None:
         with self._lock:
-            self._stop_locked()
-
-    def _stop_locked(self) -> None:
-        server, self._server = self._server, None
-        if server is not None:
-            server.shutdown()
-            server.server_close()
-        if self._thread is not None:
-            self._thread.join(timeout=5)
-            self._thread = None
+            servers = [s for s in (self._main, self._plain, self._probe) if s is not None]
+            self._main = self._plain = self._probe = None
+        for running in servers:
+            running.stop()

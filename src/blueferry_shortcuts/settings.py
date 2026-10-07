@@ -31,6 +31,9 @@ DEFAULT_PORT = 47801
 # Plain HTTP (opt-in, approved networks only) listens one port below.
 DEFAULT_HTTP_PORT = 47800
 MAX_NETWORKS = 16
+# The iCloud link of the shared "BlueFerry" shortcut; the setting
+# ``shortcut_url`` overrides it. Empty until the shortcut is published.
+DEFAULT_SHORTCUT_URL = ""
 # No 0/o, 1/l/i: the token is typed into the Shortcuts app by hand.
 TOKEN_ALPHABET = "abcdefghjkmnpqrstuvwxyz23456789"
 TOKEN_GROUPS = 6
@@ -46,6 +49,26 @@ SettingsError = SecretsError
 def certificate_store(directory: Path) -> CertificateStore:
     """The local CA and server certificate next to the settings."""
     return CertificateStore(directory, ca_name=CA_NAME)
+
+
+class ProbeCertificates(CertificateStore):
+    """A second server certificate from the same CA, for the trust probe.
+
+    Safari's "visit this website" exception is bound to a certificate, so a
+    probe with another certificate only succeeds when the CA is trusted.
+    """
+
+    @property
+    def cert_path(self) -> Path:
+        return self.directory / "probe.pem"
+
+    @property
+    def key_path(self) -> Path:
+        return self.directory / "probe-key.pem"
+
+
+def probe_store(directory: Path) -> ProbeCertificates:
+    return ProbeCertificates(directory, ca_name=CA_NAME)
 
 
 @dataclass(frozen=True, slots=True)

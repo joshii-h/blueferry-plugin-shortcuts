@@ -9,6 +9,7 @@ import stat
 from blueferry.plugin_api import PLUGIN_INTERFACE
 from blueferry.plugin_api.testing import inline_service
 from fakehost import FakeHost
+from fakenet import FakeNetworks
 
 from blueferry_shortcuts import PLUGIN_ID, load_manifest, manifest_text
 from blueferry_shortcuts import __main__ as cli
@@ -34,7 +35,8 @@ def test_manifest_declares_the_surfaces_and_the_guided_settings() -> None:
     assert manifest.api_minor == 3 and manifest.config_test and not manifest.config_login
     fields = {field.key: field for field in manifest.config}
     assert list(fields) == ["bind_address", "allow_all_interfaces", "port", "token",
-                            "allow_clipboard_read", "accept_images"]
+                            "allow_clipboard_read", "accept_images", "shortcut_url",
+                            "allow_http", "http_port", "http_networks"]
     assert fields["port"].default == 47801
     assert fields["token"].secret
     assert fields["allow_clipboard_read"].empty() is False
@@ -42,7 +44,11 @@ def test_manifest_declares_the_surfaces_and_the_guided_settings() -> None:
     groups = {key: field.group for key, field in fields.items()}
     assert groups == {"bind_address": "options", "allow_all_interfaces": "advanced",
                       "port": "options", "token": "advanced",
-                      "allow_clipboard_read": "options", "accept_images": "options"}
+                      "allow_clipboard_read": "options", "accept_images": "options",
+                      "shortcut_url": "options", "allow_http": "advanced",
+                      "http_port": "advanced", "http_networks": "advanced"}
+    assert fields["allow_http"].default in (False, "false")
+    assert fields["http_port"].default == 47800
     assert fields["token"].help_url.startswith("https://github.com/")
     assert fields["port"].error_text and fields["bind_address"].placeholder
 
@@ -116,9 +122,24 @@ def test_language_detection() -> None:
 # ---- settings form (Plugin1.GetConfig/SetConfig) ------------------------------------
 
 class _Bridge:
+    plain_address = None
+    probe_address = None
+
     def __init__(self, _endpoints) -> None:
         self.started = []
         self.fail_port = None
+
+    def start_plain(self, host, port) -> None:
+        self.plain_address = (host, port)
+
+    def stop_plain(self) -> None:
+        self.plain_address = None
+
+    def start_probe(self, host, port, context) -> None:
+        self.probe_address = (host, port)
+
+    def stop_probe(self) -> None:
+        self.probe_address = None
 
     def start(self, host, port, context) -> None:
         if port == self.fail_port:
@@ -145,14 +166,15 @@ def test_settings_form(tmp_path) -> None:
     service = inline_service(
         ShortcutsService, load_manifest(), None, settings=store, bridge_factory=_Bridge,
         resolve=lambda s, a: s or "192.168.1.20", local_addresses=lambda: ["192.168.1.20"],
-        lang="en",
+        lang="en", networks=FakeNetworks(), run_async=lambda work: work(),
     )
     host = FakeHost(service)
     service.start()
     values = _call(service.GetConfig)["values"]
     assert values == {"bind_address": "", "allow_all_interfaces": False, "port": 47801,
                       "token": "********", "allow_clipboard_read": False,
-                      "accept_images": False}
+                      "accept_images": False, "allow_http": False, "http_port": 47800,
+                      "http_networks": "", "shortcut_url": ""}
     reply = _call(service.SetConfig, json.dumps({"bind_address": "0.0.0.0"}))
     assert reply["ok"] is False and "bind_address" in reply["errors"]
     reply = _call(service.SetConfig, json.dumps({"token": "short"}))
@@ -182,6 +204,7 @@ def test_test_connection_checks_without_storing(tmp_path, caplog) -> None:
     service = inline_service(
         ShortcutsService, load_manifest(), None, settings=store, bridge_factory=_Bridge,
         resolve=lambda s, a: "127.0.0.1", local_addresses=lambda: ["127.0.0.1"], lang="en",
+        networks=FakeNetworks(), run_async=lambda work: work(),
     )
     host = FakeHost(service)
     service.start()

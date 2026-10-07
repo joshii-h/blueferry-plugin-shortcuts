@@ -13,6 +13,7 @@ from blueferry.plugin_api.testing import inline_service
 from blueferry_plugin_kit.lanserver.tls import CertificateStore
 from blueferry_plugin_kit.testing import FakeClipboard
 from fakehost import FakeHost
+from fakenet import FakeNetworks
 
 from blueferry_shortcuts import load_manifest
 from blueferry_shortcuts.server import MAX_TEXT_BYTES, RateLimiter
@@ -30,9 +31,10 @@ def _free_port() -> int:
 
 
 class Harness:
-    def __init__(self, tmp_path, **settings) -> None:
+    def __init__(self, tmp_path, networks=None, **settings) -> None:
         self.store = SettingsStore(tmp_path / "config", tmp_path / "state")
         self.port = _free_port()
+        self.networks = networks or FakeNetworks()
         self.store.save(Settings(port=self.port, **settings))
         self.clipboard = FakeClipboard("PC-Text äöü")
         self.tunnel: tuple[str, bool] | None = None
@@ -41,7 +43,8 @@ class Harness:
             settings=self.store, clipboard=self.clipboard,
             resolve=lambda setting, allow_all: "127.0.0.1",
             local_addresses=lambda: ["127.0.0.1"], lang="de",
-            route_tunnel=lambda: self.tunnel,
+            route_tunnel=lambda: self.tunnel, networks=self.networks,
+            run_async=lambda work: work(),
         )
         self.host = FakeHost(self.service)
         self.service.start()
@@ -262,13 +265,15 @@ def test_setup_card_masks_and_reveals_the_token(harness) -> None:
     h = harness()
     bridge = h.host.item("bridge")
     assert bridge["subtitle"] == f"Bereit auf https://127.0.0.1:{h.port}"
-    assert [a["id"] for a in bridge["actions"]] == ["show_setup", "new_token"]
-    assert bridge["actions"][0]["label"] == "Einrichtungsdaten anzeigen"
+    assert [a["id"] for a in bridge["actions"]] == ["setup_iphone", "show_setup", "new_token"]
+    assert bridge["actions"][0]["label"] == "iPhone einrichten"
+    assert bridge["actions"][0]["kind"] == "primary"
+    assert bridge["actions"][1]["label"] == "Einrichtungsdaten anzeigen"
     assert not any(i["id"].startswith("setup_") for i in h.host.items())
 
     assert h.host.invoke("bridge", "show_setup")["ok"]
     ids = [i["id"] for i in h.host.items()]
-    assert ids == ["bridge", "setup_url", "setup_token", "setup_fingerprint", "setup_ca"]
+    assert ids == ["bridge", "state", "setup_url", "setup_token", "setup_fingerprint"]
     token_item = h.host.item("setup_token")
     assert token_item["subtitle"] == mask_token(h.token) and h.token not in json.dumps(
         h.host.items())
@@ -280,7 +285,7 @@ def test_setup_card_masks_and_reveals_the_token(harness) -> None:
     assert h.host.invoke("setup_token", "hide")["ok"]
     assert h.host.item("setup_token")["subtitle"] == mask_token(h.token)
     assert h.host.invoke("bridge", "hide_setup")["ok"]
-    assert [i["id"] for i in h.host.items()] == ["bridge"]
+    assert [i["id"] for i in h.host.items()] == ["bridge", "state"]
     assert h.host.invoke("bridge", "explode")["ok"] is False
     assert h.host.invoke("bridge", "show_setup", "not json")["ok"] is False
 
@@ -304,7 +309,7 @@ def test_port_in_use_is_reported(tmp_path) -> None:
         service = inline_service(
             ShortcutsService, load_manifest(), None, settings=store,
             clipboard=FakeClipboard(), resolve=lambda s, a: "127.0.0.1",
-            local_addresses=lambda: ["127.0.0.1"], lang="en",
+            local_addresses=lambda: ["127.0.0.1"], lang="en", networks=FakeNetworks(),
         )
         host = FakeHost(service)
         service.start()

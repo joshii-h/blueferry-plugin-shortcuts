@@ -43,7 +43,7 @@ ErrorText=Use a port from 1024 to 65535.
 Label=Access token
 Type=secret
 Advanced=true
-Help=Created automatically. Enter it in the shortcut as the header "Authorization: Bearer <token>".
+Help=Created automatically. "Set up iPhone" on the card shows it on the iPhone with a Copy button.
 HelpUrl=https://github.com/joshii-h/blueferry-plugin-shortcuts#the-request-action
 
 [Config allow_clipboard_read]
@@ -59,3 +59,38 @@ Type=bool
 Default=false
 Group=options
 Help=PNG, JPEG, GIF or WebP up to 10 MB on POST /clipboard.
+
+[Config shortcut_url]
+Label=Shortcut link
+Type=url
+Group=options
+Placeholder=https://www.icloud.com/shortcuts/…
+Pattern=^(https://(www\.)?icloud\.com/shortcuts/[0-9A-Za-z]{16,64}/?)?$
+ErrorText=Paste the iCloud link of the shared BlueFerry shortcut.
+Help=The iCloud link of the shared "BlueFerry" shortcut. The setup page offers it as "Add shortcut". Empty: the built-in link, if any.
+HelpUrl=https://github.com/joshii-h/blueferry-plugin-shortcuts#the-blueferry-shortcut
+
+[Config allow_http]
+Label=Allow unencrypted in the home network (HTTP)
+Type=bool
+Default=false
+Advanced=true
+Help=Lets shortcuts work without the certificate. Anyone in the same Wi-Fi can read what is sent. Only in networks you approve (NetworkManager profile); never in open Wi-Fi. Reading the PC clipboard always needs HTTPS.
+HelpUrl=https://github.com/joshii-h/blueferry-plugin-shortcuts#unencrypted-in-the-home-network
+
+[Config http_port]
+Label=HTTP port
+Type=int
+Default=47800
+Min=1024
+Max=65535
+Advanced=true
+ShowIf=allow_http=true
+ErrorText=Use a port from 1024 to 65535.
+
+[Config http_networks]
+Label=Approved networks
+Type=string
+Advanced=true
+ShowIf=allow_http=true
+Help=The networks approved for HTTP, set when you turn it on or tap "Approve this network" on the card. Delete a name to remove it.
