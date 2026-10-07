@@ -5,7 +5,7 @@ iOS Shortcuts bridge for BlueFerry: clipboard, links and battery from your iPhon
 A plugin for [BlueFerry](https://github.com/joshii-h/blueferry). iOS
 Shortcuts can send HTTP requests; this plugin is the receiver on the PC. It
 runs a small HTTPS endpoint in your LAN and shows what arrives through
-BlueFerry's generic plugin surfaces (plugin API 1.2): a **card** on the
+BlueFerry's generic plugin surfaces (plugin API 1.2, settings form 1.3): a **card** on the
 phone page and desktop **notifications**. It runs as its own process on the
 session bus and talks to BlueFerry only through `blueferry.plugin_api`.
 
@@ -13,7 +13,7 @@ session bus and talks to BlueFerry only through `blueferry.plugin_api`.
 | --- | --- |
 | `POST /clipboard` | Text (optionally an image) goes to the desktop clipboard via `wl-copy`, marked as sensitive so clipboard managers keep it out of their history (wl-clipboard 2.3+). Notification "Clipboard from iPhone". |
 | `GET /clipboard` | Returns the PC clipboard as text, so a shortcut can copy it to the iPhone. **Off by default.** |
-| `POST /link` | Notification with the host name and an "Open" button that opens the full URL (http/https only). |
+| `POST /link` | Notification with the host name and an "Open" button that opens the full URL (http/https only). Sign-in data in the link (`https://user:password@host/…`) is removed first and the notification says so. |
 | `POST /battery` | Card item "iPhone battery 87 % ⚡ charging" with the time of the report. |
 | `GET /ca.crt` | The plugin's CA certificate, to install on the iPhone (no token needed; it is public). |
 
@@ -41,6 +41,11 @@ fingerprint; `forget` removes token, settings and certificates.
 
 BlueFerry's settings, Plugins > iOS Shortcuts bridge, or
 `blueferry plugins config io.weirdware.blueferry.shortcuts --set KEY=VALUE`.
+The form groups the settings under "Options" and "Advanced"; **Test
+connection** (`--test` in the CLI) asks the running endpoint for its
+certificate like the iPhone would ("Reachable at https://192.168.1.20:47801."),
+or, for a new address or port, checks that it is free. Nothing is saved or
+restarted by the test.
 
 | Setting | Default | Meaning |
 | --- | --- | --- |
@@ -68,7 +73,10 @@ BlueFerry's settings, Plugins > iOS Shortcuts bridge, or
 - No request content is logged, and nothing is forwarded to the network:
   requests only reach the clipboard, the card and notifications.
   Notifications for the clipboard show the length, not the text; links show
-  only the host, never path or query.
+  only the host, never path or query. User name and password in a link are
+  stripped before the link reaches BlueFerry and are never logged.
+- Failed TLS handshakes (for example an iPhone that does not trust the CA
+  yet) are logged at debug level with the TLS reason only, no address.
 - Token, settings and keys are owner-only files in
   `~/.config/blueferry/plugins/io.weirdware.blueferry.shortcuts/`. The token is
   not kept in the keyring on purpose: you need to read it to type it into
