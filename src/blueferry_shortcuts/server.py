@@ -24,19 +24,21 @@ import hmac
 import json
 import logging
 import math
-import socket
 import ssl
 import threading
 import time
-from collections import defaultdict, deque
 from collections.abc import Callable
-from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from typing import Protocol
 from urllib.parse import urlsplit
 
 from blueferry_plugin_kit.clipboard import ClipboardError
-
-from blueferry_shortcuts.limits import ConnectionsPerAddress, DeadlineReader, deadline_rfile
+from blueferry_plugin_kit.lanserver import (
+    DeadlineRequestHandler,
+    HardenedHTTPServer,
+    RequestError,
+    serve_in_thread,
+)
+from blueferry_plugin_kit.lanserver import RateLimiter as _KitRateLimiter
 
 log = logging.getLogger(__name__)
 
@@ -82,50 +84,14 @@ class Endpoints(Protocol):
     def on_battery(self, level: int, charging: bool | None) -> None: ...
 
 
-class RequestError(Exception):
-    def __init__(self, status: int, token: str) -> None:
-        super().__init__(token)
-        self.status = status
-        self.token = token
-
-
-class RateLimiter:
-    """Sliding windows per client address."""
+class RateLimiter(_KitRateLimiter):
+    """Sliding windows per client address, with this plugin's limits."""
 
     def __init__(self, clock: Callable[[], float] = time.monotonic) -> None:
-        self._clock = clock
-        self._lock = threading.Lock()
-        self._requests: dict[str, deque[float]] = defaultdict(deque)
-        self._failures: dict[str, deque[float]] = defaultdict(deque)
-
-    def _trim(self, window: deque[float], span: float, now: float) -> None:
-        while window and now - window[0] > span:
-            window.popleft()
-
-    def admit(self, client: str) -> bool:
-        now = self._clock()
-        with self._lock:
-            failures = self._failures[client]
-            self._trim(failures, FAILURE_WINDOW_S, now)
-            if len(failures) >= FAILURES_ALLOWED:
-                return False
-            requests = self._requests[client]
-            self._trim(requests, 60, now)
-            if len(requests) >= REQUESTS_PER_MINUTE:
-                return False
-            requests.append(now)
-            if len(self._requests) > 1024:
-                self._forget_idle(now)
-            return True
-
-    def failed(self, client: str) -> None:
-        with self._lock:
-            self._failures[client].append(self._clock())
-
-    def _forget_idle(self, now: float) -> None:
-        for table, span in ((self._requests, 60), (self._failures, FAILURE_WINDOW_S)):
-            for key in [k for k, window in table.items() if not window or now - window[-1] > span]:
-                del table[key]
+        super().__init__(
+            clock, requests_per_minute=REQUESTS_PER_MINUTE, failures_allowed=FAILURES_ALLOWED,
+            failure_window=FAILURE_WINDOW_S,
+        )
 
 
 def check_url(value: object) -> str:
@@ -185,105 +151,31 @@ def sniff_image(data: bytes) -> str | None:
     return None
 
 
-class _Server(ThreadingHTTPServer):
-    daemon_threads = True
-    allow_reuse_address = True
-    request_queue_size = 16
-
+class _Server(HardenedHTTPServer):
     def __init__(self, address, endpoints: Endpoints, context: ssl.SSLContext,
                  limiter: RateLimiter) -> None:
-        if ":" in address[0]:
-            self.address_family = socket.AF_INET6
         self.endpoints = endpoints
-        self.ssl_context = context
         self.limiter = limiter
-        self._slots = threading.BoundedSemaphore(MAX_CONNECTIONS)
-        self._per_address = ConnectionsPerAddress(MAX_CONNECTIONS_PER_ADDRESS)
-        super().__init__(address, _Handler)
+        super().__init__(
+            address, _Handler, context=context, max_connections=MAX_CONNECTIONS,
+            max_per_address=MAX_CONNECTIONS_PER_ADDRESS,
+        )
 
-    def process_request(self, request, client_address) -> None:
-        if not self._slots.acquire(blocking=False):
-            self.shutdown_request(request)
-            return
-        if not self._per_address.acquire(str(client_address[0])):
-            self._slots.release()
-            self.shutdown_request(request)
-            return
-        try:
-            super().process_request(request, client_address)
-        except Exception:
-            self._release(client_address)
-            raise
-
-    def _release(self, client_address) -> None:
-        self._per_address.release(str(client_address[0]))
-        self._slots.release()
-
-    def process_request_thread(self, request, client_address) -> None:
-        try:
-            super().process_request_thread(request, client_address)
-        finally:
-            self._release(client_address)
-
-    def handle_error(self, request, client_address) -> None:
-        # TLS handshakes from browsers that do not trust the CA, timeouts…
-        log.debug("connection error", exc_info=True)
+    def handshake_timeout(self) -> float:
+        # Read at runtime, so the deadline can be changed (tests do).
+        return REQUEST_DEADLINE_S
 
 
-class _Handler(BaseHTTPRequestHandler):
+class _Handler(DeadlineRequestHandler):
     server: _Server
     server_version = "BlueFerryShortcuts"
-    sys_version = ""
-    protocol_version = "HTTP/1.1"
     timeout = CONNECTION_TIMEOUT_S
-    _deadline: DeadlineReader
+    linger_s = LINGER_S
+    linger_bytes = LINGER_BYTES
 
-    def setup(self) -> None:
-        # CPython bounds the whole handshake by the socket timeout, not
-        # each read, so a trickled ClientHello ends here too.
-        self.request.settimeout(REQUEST_DEADLINE_S)
-        self.request = self.server.ssl_context.wrap_socket(self.request, server_side=True)
-        super().setup()
-        # Every read gets the time left of the request, so a client
-        # trickling a byte now and then cannot keep the connection.
-        self.rfile.close()
-        self._deadline, self.rfile = deadline_rfile(self.connection, CONNECTION_TIMEOUT_S)
-        self._deadline.start(REQUEST_DEADLINE_S)
-
-    def finish(self) -> None:
-        try:
-            super().finish()
-        finally:
-            self._linger()
-
-    def _linger(self) -> None:
-        """Swallow what the client still sends before closing.
-
-        An early answer (401, 413, …) leaves the body unread; closing then
-        would reset the connection and the shortcut would show a network
-        error instead of the answer. Bounded in total time (not per read,
-        or a trickling client would keep it going) and size.
-        """
-        deadline = time.monotonic() + LINGER_S
-        try:
-            budget = LINGER_BYTES
-            while budget > 0:
-                remaining = deadline - time.monotonic()
-                if remaining <= 0:
-                    break
-                self.connection.settimeout(remaining)
-                chunk = self.connection.recv(min(65536, budget))
-                if not chunk:
-                    break
-                budget -= len(chunk)
-        except (OSError, ValueError):
-            pass
-
-    def log_message(self, format: str, *args: object) -> None:
-        """Never log paths, headers or bodies."""
-
-    def log_request(self, code: object = "-", size: object = "-") -> None:
-        log.debug("%s %s", self.command, code)
+    def request_deadline(self) -> float:
+        # Read at runtime, so the deadline can be changed (tests do).
+        return REQUEST_DEADLINE_S
 
     # ---- plumbing --------------------------------------------------------
 
@@ -315,25 +207,7 @@ class _Handler(BaseHTTPRequestHandler):
         return scheme.casefold() == "bearer" and match
 
     def _body(self, limit: int) -> bytes:
-        if self.headers.get("Transfer-Encoding"):
-            raise RequestError(411, "length-required")
-        raw = self.headers.get("Content-Length")
-        if raw is None:
-            raise RequestError(411, "length-required")
-        try:
-            length = int(raw)
-        except ValueError:
-            raise RequestError(400, "bad-length") from None
-        if length < 0:
-            raise RequestError(400, "bad-length")
-        if length > limit:
-            raise RequestError(413, "too-large")
-        self._deadline.stream(max(0.0, self._deadline.remaining()) + REQUEST_DEADLINE_S,
-                              MIN_BODY_RATE)
-        data = self.rfile.read(length)
-        if len(data) != length:
-            raise RequestError(400, "short-body")
-        return data
+        return self.read_body(limit, min_rate=MIN_BODY_RATE)
 
     def _content_type(self) -> str:
         return self.headers.get("Content-Type", "").split(";", 1)[0].strip().casefold()
@@ -478,11 +352,7 @@ class HttpsBridge:
         with self._lock:
             self._stop_locked()
             server = _Server((host, port), self._endpoints, context, self._limiter)
-            thread = threading.Thread(
-                target=server.serve_forever, kwargs={"poll_interval": 0.5},
-                name="blueferry-shortcuts-https", daemon=True,
-            )
-            thread.start()
+            thread = serve_in_thread(server, "blueferry-shortcuts-https")
             self._server, self._thread = server, thread
 
     def reload_context(self, context: ssl.SSLContext) -> None:
