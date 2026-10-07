@@ -273,7 +273,7 @@ python3 -m venv --system-site-packages .venv   # dbus-python, PyGObject from the
 BlueFerry repository. The clipboard helper, the listen-address choice, the
 owner-only files, the certificates and the hardened HTTPS server come from
 the shared [blueferry-plugin-kit](https://github.com/joshii-h/blueferry-plugin-kit)
-(tag `kit-v0.2.1`, extra `lanserver`); the routes stay in this plugin.
+(tag `kit-v0.3.0`, extra `lanserver`); the routes stay in this plugin.
 Tests run the real HTTPS server on localhost with the plugin's CA, and the
 kit's fake clipboard and fake host, which checks every card reply against
 the 1.2 limits. The
