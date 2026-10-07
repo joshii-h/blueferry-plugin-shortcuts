@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import json
 import os
+import socket
 import stat
 
 from blueferry.plugin_api import PLUGIN_INTERFACE
@@ -24,13 +25,13 @@ from blueferry_shortcuts.surfaces import language
 
 # ---- manifest -------------------------------------------------------------------
 
-def test_manifest_declares_the_12_surfaces_and_settings() -> None:
+def test_manifest_declares_the_surfaces_and_the_guided_settings() -> None:
     text = manifest_text()
-    assert "ApiVersion=1.2" in text and "Capabilities=card;notify;" in text
+    assert "ApiVersion=1.3" in text and "Capabilities=card;notify;" in text
     manifest = load_manifest()
     assert manifest.id == PLUGIN_ID
     assert manifest.capabilities == ("card", "notify")
-    assert manifest.api_minor == 2
+    assert manifest.api_minor == 3 and manifest.config_test and not manifest.config_login
     fields = {field.key: field for field in manifest.config}
     assert list(fields) == ["bind_address", "allow_all_interfaces", "port", "token",
                             "allow_clipboard_read", "accept_images"]
@@ -38,6 +39,12 @@ def test_manifest_declares_the_12_surfaces_and_settings() -> None:
     assert fields["token"].secret
     assert fields["allow_clipboard_read"].empty() is False
     assert fields["allow_all_interfaces"].empty() is False
+    groups = {key: field.group for key, field in fields.items()}
+    assert groups == {"bind_address": "options", "allow_all_interfaces": "advanced",
+                      "port": "options", "token": "advanced",
+                      "allow_clipboard_read": "options", "accept_images": "options"}
+    assert fields["token"].help_url.startswith("https://github.com/")
+    assert fields["port"].error_text and fields["bind_address"].placeholder
 
 
 def test_activation_files_and_autostart(tmp_path) -> None:
@@ -164,3 +171,40 @@ def test_settings_form(tmp_path) -> None:
     assert store.load().allow_clipboard_read is True
     assert host.card_changed >= 2
     assert service.status()["detail"] == "listening on https://192.168.1.20:50002"
+
+
+def test_test_connection_checks_without_storing(tmp_path, caplog) -> None:
+    import logging
+
+    caplog.set_level(logging.DEBUG)
+    store = SettingsStore(tmp_path / "c", tmp_path / "s")
+    store.save(Settings())
+    service = inline_service(
+        ShortcutsService, load_manifest(), None, settings=store, bridge_factory=_Bridge,
+        resolve=lambda s, a: "127.0.0.1", local_addresses=lambda: ["127.0.0.1"], lang="en",
+    )
+    host = FakeHost(service)
+    service.start()
+    before = (store.config_path.read_bytes(), store.token())
+    with socket.socket() as busy:
+        busy.bind(("127.0.0.1", 0))
+        busy.listen()
+        port = busy.getsockname()[1]
+        result = host.test_config({"port": port})
+        assert result["ok"] is False and result["errors"] == {"port": "the port is already in use"}
+    result = host.test_config({"port": port})
+    free = f"https://127.0.0.1:{port} is free; save to start listening there."
+    assert result == {"ok": True, "message": free}
+    result = host.test_config({"bind_address": "0.0.0.0"})
+    assert result["ok"] is False and "bind_address" in result["errors"]
+    secret = "typed-token-0123456789-secret"
+    assert host.test_config({"token": secret, "port": port})["ok"] is True
+    assert host.test_config({"token": "short"})["errors"].keys() == {"token"}
+    # The configured endpoint is "running" on the fake bridge but answers nothing.
+    result = host.test_config({})
+    assert result == {"ok": False, "message":
+                      "The endpoint at https://127.0.0.1:47801 did not answer (no connection)."}
+    assert (store.config_path.read_bytes(), store.token()) == before
+    assert service._bridge.started == [("127.0.0.1", 47801)]   # nothing restarted
+    host.assert_never_sent(secret, store.token())
+    assert secret not in caplog.text and "127.0.0.1" not in caplog.text

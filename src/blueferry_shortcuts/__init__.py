@@ -2,7 +2,8 @@
 
 Shortcuts on the iPhone send the clipboard, links and the battery level to
 the PC (and may fetch the PC clipboard). The plugin shows them through the
-generic plugin surfaces of plugin API 1.2: ``card`` and ``notify``.
+generic plugin surfaces of plugin API 1.2 (``card`` and ``notify``); the
+settings form uses the 1.3 additions (sections, examples, "Test connection").
 
 Imports only ``blueferry.plugin_api`` from BlueFerry.
 """
@@ -13,10 +14,10 @@ import re
 from importlib import resources
 
 PLUGIN_ID = "io.weirdware.blueferry.shortcuts"
-__version__ = "0.1.3"
+__version__ = "0.2.0"
 
 CAPABILITIES = ("card", "notify")
-API_MINOR = 2
+API_MINOR = 3
 
 
 def manifest_text() -> str:
