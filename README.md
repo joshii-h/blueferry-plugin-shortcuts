@@ -262,11 +262,13 @@ python3 -m venv --system-site-packages .venv   # dbus-python, PyGObject from the
 ```
 
 `blueferry-plugin-api` comes from the `plugin-api` directory of the
-BlueFerry repository. With a plugin_api older than 1.2 the plugin still
-runs and tests pass: it validates its manifest with the installed parser
-and implements the `card` and `notify` interfaces itself. Tests run the real
-HTTPS server on localhost with a test CA, a fake clipboard and a minimal
-fake host that checks every card reply against the 1.2 limits. The
+BlueFerry repository. The clipboard helper, the listen-address choice, the
+owner-only files, the certificates and the hardened HTTPS server come from
+the shared [blueferry-plugin-kit](https://github.com/joshii-h/blueferry-plugin-kit)
+(tag `kit-v0.1.0`, extra `lanserver`); the routes stay in this plugin.
+Tests run the real HTTPS server on localhost with the plugin's CA, and the
+kit's fake clipboard and fake host, which checks every card reply against
+the 1.2 limits. The
 Shortcuts steps above have not been verified on an iPhone yet.
 
 ## License
