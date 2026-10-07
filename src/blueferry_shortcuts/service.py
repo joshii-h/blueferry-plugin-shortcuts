@@ -64,6 +64,17 @@ def _host_of(url: str) -> str:
     return f"[{host}]" if ":" in host else host
 
 
+def strip_userinfo(url: str) -> tuple[str, bool]:
+    """``url`` without ``user:password@`` in front of the host, and whether
+    there was one. Everything else stays exactly as sent."""
+    parts = urlsplit(url)
+    if "@" not in parts.netloc:
+        return url, False
+    start = len(parts.scheme) + 3     # "<scheme>://", as check_url guarantees
+    host = parts.netloc.rpartition("@")[2]
+    return url[:start] + host + url[start + len(parts.netloc):], True
+
+
 def battery_icon(level: int, charging: bool) -> str:
     name = (
         "battery-empty" if level < 5 else "battery-caution" if level < 15
@@ -246,6 +257,11 @@ class ShortcutsService(PluginService):
         return self._clipboard.read_text(limit)
 
     def on_link(self, url: str) -> None:
+        # Links with user info (https://user:pw@host/) carry credentials;
+        # BlueFerry refuses to open them, and a browser would keep them in
+        # its history. Hand the link on without them and say so; the site
+        # then asks for the sign-in itself.
+        url, removed = strip_userinfo(url)
         with self._lock:
             self._link_counter += 1
             action_id = f"open-{self._link_counter}"
@@ -255,7 +271,11 @@ class ShortcutsService(PluginService):
         # The notification shows only the host: paths and queries may hold
         # tokens or personal data and stay on the screen (and in the
         # notification history). The full URL waits in _links for "Open".
-        self._notify(self._t["link_title"], _host_of(url), "internet-web-browser",
+        body = (self._t["link_userinfo"].format(host=_host_of(url)) if removed
+                else _host_of(url))
+        if removed:
+            log.info("link received; sign-in data removed")
+        self._notify(self._t["link_title"], body, "internet-web-browser",
                      self._t["open"], action_id)
 
     def on_battery(self, level: int, charging: bool | None) -> None:

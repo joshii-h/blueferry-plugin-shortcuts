@@ -187,7 +187,7 @@ def test_get_clipboard_only_when_enabled(harness) -> None:
 
 def test_link_notification_opens_through_invoke_action(harness) -> None:
     h = harness()
-    url = "https://user:pw@Example.org:8443/reset?token=geheim#x"
+    url = "https://Example.org:8443/reset?token=geheim#x"
     assert h.request("POST", "/link", {"url": url})[0] == 200
     title, body, _icon, label, action = h.host.notifications[-1]
     assert (title, body, label) == ("Link vom iPhone", "example.org", "Öffnen") and action
@@ -197,6 +197,33 @@ def test_link_notification_opens_through_invoke_action(harness) -> None:
                      content_type="text/plain")[0] == 200
     for bad in ("javascript:alert(1)", "file:///etc/passwd", "https://", "http://a b", 42):
         assert h.request("POST", "/link", {"url": bad})[0] == 400, bad
+
+
+def test_links_lose_their_user_info_before_blueferry_sees_them(harness, caplog) -> None:
+    caplog.set_level(logging.DEBUG)
+    h = harness()
+    url = "https://anna.user:Pa%40ss-w0rd@Example.org:8443/reset?next=a@b#x"
+    assert h.request("POST", "/link", {"url": url})[0] == 200
+    title, body, _icon, _label, _action = h.host.notifications[-1]
+    assert title == "Link vom iPhone"
+    assert body == "example.org · Anmeldedaten aus dem Link entfernt"
+    opened = h.host.click_notification()["open_uri"]
+    assert opened == "https://Example.org:8443/reset?next=a@b#x"
+    assert h.request("POST", "/link", b"http://only-user@192.168.1.1/x",
+                     content_type="text/plain")[0] == 200
+    assert h.host.click_notification()["open_uri"] == "http://192.168.1.1/x"
+    for secret in ("anna.user", "Pa%40ss-w0rd", "Pa@ss", "only-user"):
+        h.host.assert_never_sent(secret)
+        assert secret not in caplog.text
+    assert "sign-in data removed" in caplog.text
+
+
+def test_strip_userinfo_keeps_everything_else() -> None:
+    from blueferry_shortcuts.service import strip_userinfo
+
+    assert strip_userinfo("https://example.org/a@b") == ("https://example.org/a@b", False)
+    assert strip_userinfo("HTTPS://u:p@[::1]:8443/p?q=1") == ("HTTPS://[::1]:8443/p?q=1", True)
+    assert strip_userinfo("https://a@b:c@host/") == ("https://host/", True)
 
 
 def test_battery_becomes_a_card_item(harness) -> None:
