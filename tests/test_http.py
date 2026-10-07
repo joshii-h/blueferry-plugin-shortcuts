@@ -10,13 +10,13 @@ import time
 
 import pytest
 from blueferry.plugin_api.testing import inline_service
+from blueferry_plugin_kit.lanserver.tls import CertificateStore
 from fakehost import FakeHost
 
 from blueferry_shortcuts import load_manifest
 from blueferry_shortcuts.server import MAX_TEXT_BYTES, RateLimiter
 from blueferry_shortcuts.service import ShortcutsService, mask_token
 from blueferry_shortcuts.settings import Settings, SettingsStore
-from blueferry_shortcuts.tls import CertificateStore
 
 SECRET_TEXT = "geheim-4711-clipboard-content"
 PNG = b"\x89PNG\r\n\x1a\n" + b"\x00" * 64

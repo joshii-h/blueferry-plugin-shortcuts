@@ -23,12 +23,14 @@ from blueferry.plugin_api.manifest import PluginManifest
 from blueferry.plugin_api.service import PluginCallError, PluginService
 from blueferry_plugin_kit import netaddr
 from blueferry_plugin_kit.clipboard import Clipboard
+from blueferry_plugin_kit.lanserver.tls import CertificateStore, Material
 
 from blueferry_shortcuts.server import HttpsBridge
 from blueferry_shortcuts.settings import (
     Settings,
     SettingsError,
     SettingsStore,
+    certificate_store,
     new_token,
     valid_token,
 )
@@ -42,7 +44,6 @@ from blueferry_shortcuts.surfaces import (
     result,
     texts,
 )
-from blueferry_shortcuts.tls import CertificateStore, Material
 
 log = logging.getLogger(__name__)
 
@@ -98,7 +99,7 @@ class ShortcutsService(PluginService):
     ) -> None:
         super().__init__(manifest, bus, **kwargs)
         self._store = settings or SettingsStore()
-        self._certificates = certificates or CertificateStore(self._store.directory)
+        self._certificates = certificates or certificate_store(self._store.directory)
         self._clipboard = clipboard or Clipboard()
         self._bridge = bridge_factory(self)
         self._resolve = resolve

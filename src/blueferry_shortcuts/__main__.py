@@ -14,8 +14,7 @@ from blueferry.plugin_api.service import run
 from blueferry_plugin_kit import netaddr
 
 from blueferry_shortcuts import PLUGIN_ID, load_manifest, manifest_text
-from blueferry_shortcuts.settings import SettingsError, SettingsStore
-from blueferry_shortcuts.tls import CertificateStore
+from blueferry_shortcuts.settings import SettingsError, SettingsStore, certificate_store
 
 ENTRY_POINT = "blueferry-shortcuts"
 # The endpoint must stay reachable for the iPhone; never idle out.
@@ -103,7 +102,7 @@ def show(store: SettingsStore | None = None) -> int:
     try:
         host = netaddr.resolve(settings.bind_address, settings.allow_all_interfaces)
         addresses = netaddr.local_addresses() if netaddr.is_wildcard(host) else [host]
-        material = CertificateStore(store.directory).ensure(addresses)
+        material = certificate_store(store.directory).ensure(addresses)
     except (netaddr.AddressError, OSError, ValueError) as error:
         print(f"No listen address: {error}", file=sys.stderr)
         return 1
@@ -144,7 +143,7 @@ def main(argv: list[str] | None = None) -> int:
     if args.command == "forget":
         store = SettingsStore()
         store.forget()
-        CertificateStore(store.directory).forget()
+        certificate_store(store.directory).forget()
         print("Removed the token, settings and certificates.")
         return 0
     if args.command == "status":

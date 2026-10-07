@@ -3,7 +3,7 @@
 Everything lives in owner-only files below
 ``~/.config/blueferry/plugins/io.weirdware.blueferry.shortcuts/``:
 ``config.json`` (listen address, port, switches), ``token`` (0600) and the
-certificates (see :mod:`blueferry_shortcuts.tls`). The last battery report
+certificates (see :func:`certificate_store`). The last battery report
 is kept in ``$XDG_STATE_HOME`` so the card survives a restart. The token
 is not kept in the keyring on purpose: the card must be able to show it
 for typing it into a shortcut, and the HTTPS thread checks it per request.
@@ -16,6 +16,7 @@ import secrets
 from dataclasses import asdict, dataclass, replace
 from pathlib import Path
 
+from blueferry_plugin_kit.lanserver.tls import CertificateStore
 from blueferry_plugin_kit.secrets import (
     SecretsError,
     config_dir,
@@ -31,10 +32,17 @@ DEFAULT_PORT = 47801
 TOKEN_ALPHABET = "abcdefghjkmnpqrstuvwxyz23456789"
 TOKEN_GROUPS = 6
 _TOKEN = re.compile(r"^[\x21-\x7e]{16,128}$")
+# Common name of the local CA ("<name> (<host>)"); existing CAs stay valid.
+CA_NAME = "BlueFerry Shortcuts CA"
 
 # The kit's private-file helpers raise SecretsError; every ``except
 # SettingsError`` in the plugin catches them through this alias.
 SettingsError = SecretsError
+
+
+def certificate_store(directory: Path) -> CertificateStore:
+    """The local CA and server certificate next to the settings."""
+    return CertificateStore(directory, ca_name=CA_NAME)
 
 
 @dataclass(frozen=True, slots=True)

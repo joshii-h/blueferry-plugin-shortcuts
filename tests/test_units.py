@@ -1,15 +1,12 @@
-"""Manifest, settings, certificates and CLI."""
+"""Manifest, settings, request parsing, settings form and CLI."""
 from __future__ import annotations
 
-import datetime as dt
-import ipaddress
 import json
 import os
 import stat
 
 from blueferry.plugin_api import PLUGIN_INTERFACE
 from blueferry.plugin_api.testing import inline_service
-from cryptography import x509
 from fakehost import FakeHost
 
 from blueferry_shortcuts import PLUGIN_ID, load_manifest, manifest_text
@@ -24,7 +21,6 @@ from blueferry_shortcuts.settings import (
     valid_token,
 )
 from blueferry_shortcuts.surfaces import language
-from blueferry_shortcuts.tls import SERVER_DAYS, CertificateStore
 
 # ---- manifest -------------------------------------------------------------------
 
@@ -89,32 +85,6 @@ def test_tokens_are_typeable_and_private(tmp_path) -> None:
 def test_mask_token() -> None:
     assert mask_token("abcd-efgh-jkmn") == "••••-••••-jkmn"
     assert mask_token("abcdefghjkmnpqrs") == "••••••••••••pqrs"
-
-
-# ---- certificates -------------------------------------------------------------------
-
-def test_certificates_chain_and_follow_the_address(tmp_path) -> None:
-    store = CertificateStore(tmp_path / "certs")
-    first = store.ensure(["192.168.1.20"])
-    ca = x509.load_pem_x509_certificate(first.ca_pem)
-    leaf = x509.load_pem_x509_certificate(first.cert_path.read_bytes())
-    assert ca.extensions.get_extension_for_class(x509.BasicConstraints).value.ca
-    assert leaf.issuer == ca.subject
-    leaf.verify_directly_issued_by(ca)
-    sans = leaf.extensions.get_extension_for_class(x509.SubjectAlternativeName).value
-    assert ipaddress.ip_address("192.168.1.20") in sans.get_values_for_type(x509.IPAddress)
-    lifetime = leaf.not_valid_after_utc - leaf.not_valid_before_utc
-    assert lifetime <= dt.timedelta(days=SERVER_DAYS, minutes=5) < dt.timedelta(days=825)
-    for path in (store.ca_key_path, store.key_path):
-        assert stat.S_IMODE(os.stat(path).st_mode) == 0o600
-    assert len(first.fingerprint) == 95 and first.fingerprint == store.ca_fingerprint()
-    # Same address: nothing changes. New address: new leaf, same CA (no new trust on iOS).
-    serial = leaf.serial_number
-    assert x509.load_pem_x509_certificate(
-        store.ensure(["192.168.1.20"]).cert_path.read_bytes()).serial_number == serial
-    second = store.ensure(["192.168.1.33"])
-    assert second.fingerprint == first.fingerprint
-    assert x509.load_pem_x509_certificate(second.cert_path.read_bytes()).serial_number != serial
 
 
 # ---- request parsing ----------------------------------------------------------------
