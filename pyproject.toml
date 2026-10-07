@@ -17,6 +17,8 @@ requires-python = ">=3.10"
 dependencies = [
   "blueferry-plugin-api @ git+https://github.com/joshii-h/blueferry@plugin-api-v1.4.0#subdirectory=plugin-api",
   "blueferry-plugin-kit[lanserver] @ git+https://github.com/joshii-h/blueferry-plugin-kit@kit-v0.3.0",
+  # QR code for the iPhone setup (pure Python, no dependencies).
+  "segno>=1.5,<2",
 ]
 
 [project.optional-dependencies]
