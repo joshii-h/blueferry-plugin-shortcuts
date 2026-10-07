@@ -167,6 +167,32 @@ class _Server(HardenedHTTPServer):
         # Read at runtime, so the deadline can be changed (tests do).
         return REQUEST_DEADLINE_S
 
+    def finish_request(self, request, client_address) -> None:
+        # The kit's server drops a failed handshake silently. A phone that
+        # does not trust the CA yet looks exactly like that, so say it at
+        # debug level: only the reason, never the peer or any bytes.
+        request.settimeout(self.handshake_timeout())
+        context = self.ssl_context
+        if context is not None:
+            try:
+                request = context.wrap_socket(request, server_side=True)
+            except (OSError, ssl.SSLError) as error:
+                log.debug("TLS handshake failed: %s", handshake_reason(error))
+                return
+        self.RequestHandlerClass(request, client_address, self)
+
+
+def handshake_reason(error: BaseException) -> str:
+    """A content-free reason: the TLS alert name, a timeout or the error class."""
+    if isinstance(error, ssl.SSLError):
+        reason = error.reason if isinstance(error.reason, str) else ""
+        if reason and reason.replace("_", "").isalnum():
+            return reason.lower()
+        return type(error).__name__
+    if isinstance(error, TimeoutError):
+        return "timeout"
+    return type(error).__name__
+
 
 class _Handler(DeadlineRequestHandler):
     log = log

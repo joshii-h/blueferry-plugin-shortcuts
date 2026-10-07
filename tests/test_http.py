@@ -375,3 +375,45 @@ def test_card_hints_at_a_vpn_default_route(harness) -> None:
     h.tunnel = ("Immeditech", False)
     item = next(i for i in h.host.items() if i["id"] == "vpn")
     assert "Schnittstelle in den Einstellungen" in item["subtitle"]
+
+
+def test_failed_tls_handshakes_are_logged_at_debug_without_content(harness, caplog) -> None:
+    caplog.set_level(logging.DEBUG, logger="blueferry_shortcuts")
+    h = harness()
+    # A client that does not trust the CA (the phone before the setup).
+    untrusting = ssl.create_default_context()
+    sock = socket.create_connection(("127.0.0.1", h.port), timeout=5)
+    with pytest.raises(ssl.SSLError):
+        untrusting.wrap_socket(sock, server_hostname="127.0.0.1")
+    sock.close()
+    # Plain HTTP against the TLS port.
+    with socket.create_connection(("127.0.0.1", h.port), timeout=5) as plain:
+        plain.sendall(b"GET /clipboard?secret=geheim HTTP/1.1\r\nHost: x\r\n\r\n")
+        try:
+            plain.recv(64)
+        except ConnectionResetError:
+            pass
+    deadline = time.monotonic() + 5
+    while time.monotonic() < deadline:
+        lines = [r for r in caplog.records if r.getMessage().startswith("TLS handshake failed")]
+        if len(lines) >= 2:
+            break
+        time.sleep(0.05)
+    assert len(lines) >= 2 and all(r.levelno == logging.DEBUG for r in lines)
+    text = "\n".join(r.getMessage() for r in lines)
+    assert "127.0.0.1" not in text and "geheim" not in text and "GET" not in text
+    assert all(not r.exc_info for r in lines)
+    # The endpoint still serves trusting clients.
+    assert h.request("GET", "/ca.crt", token=False)[0] == 200
+
+
+def test_handshake_reason_is_content_free() -> None:
+    from blueferry_shortcuts.server import handshake_reason
+
+    error = ssl.SSLError(1, "[SSL: HTTP_REQUEST] http request (_ssl.c:1000)")
+    error.reason = "HTTP_REQUEST"
+    assert handshake_reason(error) == "http_request"
+    error.reason = "evil text with spaces"
+    assert handshake_reason(error) == "SSLError"
+    assert handshake_reason(TimeoutError()) == "timeout"
+    assert handshake_reason(ConnectionResetError(104, "peer 10.0.0.2")) == "ConnectionResetError"
