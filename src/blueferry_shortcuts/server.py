@@ -1,7 +1,8 @@
 """The HTTPS endpoint the iPhone's shortcuts talk to.
 
 Small on purpose: one request per connection, a bounded number of
-concurrent connections, per-address rate limits (stricter for failed
+concurrent connections (two per address), a total deadline per request,
+per-address rate limits (stricter for failed
 logins), hard body limits and a constant-time token check. The TLS
 handshake runs on the connection's own thread with a timeout, so a slow
 client cannot block the accept loop. Nothing here logs request contents,
@@ -34,6 +35,7 @@ from typing import Protocol
 from urllib.parse import urlsplit
 
 from blueferry_shortcuts.clipboard import ClipboardError
+from blueferry_shortcuts.limits import ConnectionsPerAddress, DeadlineReader, deadline_rfile
 
 log = logging.getLogger(__name__)
 
@@ -45,6 +47,11 @@ MAX_SMALL_BODY = 8 * 1024
 MAX_URL = 2048
 CONNECTION_TIMEOUT_S = 15
 MAX_CONNECTIONS = 8
+MAX_CONNECTIONS_PER_ADDRESS = 2
+# The whole request (TLS handshake, request line, headers) within this; a
+# body gets as long again plus one second per 32 KiB (10 MB: about 5 min).
+REQUEST_DEADLINE_S = 20
+MIN_BODY_RATE = 32 * 1024
 LINGER_S = 1.0
 LINGER_BYTES = 1024 * 1024
 REQUESTS_PER_MINUTE = 30
@@ -190,23 +197,32 @@ class _Server(ThreadingHTTPServer):
         self.ssl_context = context
         self.limiter = limiter
         self._slots = threading.BoundedSemaphore(MAX_CONNECTIONS)
+        self._per_address = ConnectionsPerAddress(MAX_CONNECTIONS_PER_ADDRESS)
         super().__init__(address, _Handler)
 
     def process_request(self, request, client_address) -> None:
         if not self._slots.acquire(blocking=False):
             self.shutdown_request(request)
             return
+        if not self._per_address.acquire(str(client_address[0])):
+            self._slots.release()
+            self.shutdown_request(request)
+            return
         try:
             super().process_request(request, client_address)
         except Exception:
-            self._slots.release()
+            self._release(client_address)
             raise
+
+    def _release(self, client_address) -> None:
+        self._per_address.release(str(client_address[0]))
+        self._slots.release()
 
     def process_request_thread(self, request, client_address) -> None:
         try:
             super().process_request_thread(request, client_address)
         finally:
-            self._slots.release()
+            self._release(client_address)
 
     def handle_error(self, request, client_address) -> None:
         # TLS handshakes from browsers that do not trust the CA, timeouts…
@@ -219,11 +235,19 @@ class _Handler(BaseHTTPRequestHandler):
     sys_version = ""
     protocol_version = "HTTP/1.1"
     timeout = CONNECTION_TIMEOUT_S
+    _deadline: DeadlineReader
 
     def setup(self) -> None:
-        self.request.settimeout(CONNECTION_TIMEOUT_S)
+        # CPython bounds the whole handshake by the socket timeout, not
+        # each read, so a trickled ClientHello ends here too.
+        self.request.settimeout(REQUEST_DEADLINE_S)
         self.request = self.server.ssl_context.wrap_socket(self.request, server_side=True)
         super().setup()
+        # Every read gets the time left of the request, so a client
+        # trickling a byte now and then cannot keep the connection.
+        self.rfile.close()
+        self._deadline, self.rfile = deadline_rfile(self.connection, CONNECTION_TIMEOUT_S)
+        self._deadline.start(REQUEST_DEADLINE_S)
 
     def finish(self) -> None:
         try:
@@ -236,12 +260,17 @@ class _Handler(BaseHTTPRequestHandler):
 
         An early answer (401, 413, …) leaves the body unread; closing then
         would reset the connection and the shortcut would show a network
-        error instead of the answer. Bounded in time and size.
+        error instead of the answer. Bounded in total time (not per read,
+        or a trickling client would keep it going) and size.
         """
+        deadline = time.monotonic() + LINGER_S
         try:
-            self.connection.settimeout(LINGER_S)
             budget = LINGER_BYTES
             while budget > 0:
+                remaining = deadline - time.monotonic()
+                if remaining <= 0:
+                    break
+                self.connection.settimeout(remaining)
                 chunk = self.connection.recv(min(65536, budget))
                 if not chunk:
                     break
@@ -298,6 +327,8 @@ class _Handler(BaseHTTPRequestHandler):
             raise RequestError(400, "bad-length")
         if length > limit:
             raise RequestError(413, "too-large")
+        self._deadline.stream(max(0.0, self._deadline.remaining()) + REQUEST_DEADLINE_S,
+                              MIN_BODY_RATE)
         data = self.rfile.read(length)
         if len(data) != length:
             raise RequestError(400, "short-body")

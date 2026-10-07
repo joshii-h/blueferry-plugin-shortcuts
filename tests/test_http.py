@@ -307,3 +307,56 @@ def test_limiter_forgets_idle_clients() -> None:
         assert limiter.admit(f"10.0.{index // 256}.{index % 256}")
         now[0] += 0.1
     assert len(limiter._requests) < 1100
+
+
+def _raw_tls(harness):
+    sock = socket.create_connection(("127.0.0.1", harness.port), timeout=5)
+    return harness.context.wrap_socket(sock, server_hostname="127.0.0.1")
+
+
+def _closed(sock) -> bool:
+    sock.settimeout(0.05)
+    try:
+        return sock.recv(1) == b""
+    except (TimeoutError, ssl.SSLWantReadError):
+        return False
+    except OSError:
+        return True
+    finally:
+        sock.settimeout(5)
+
+
+def test_a_trickling_client_is_cut_off_at_the_deadline(harness, monkeypatch) -> None:
+    from blueferry_shortcuts import server as server_module
+
+    monkeypatch.setattr(server_module, "REQUEST_DEADLINE_S", 0.6)
+    sock = _raw_tls(harness())
+    started, closed = time.monotonic(), False
+    for byte in b"POST /battery HTTP/1.1\r\nHost: 127.0.0.1\r\nX-Slow: 1\r\n":
+        try:
+            sock.sendall(bytes([byte]))
+        except OSError:
+            closed = True
+            break
+        time.sleep(0.05)
+        if _closed(sock):
+            closed = True
+            break
+    sock.close()
+    # Every byte came long before the 15 s read timeout, yet the request ended.
+    assert closed and time.monotonic() - started < 3
+
+
+def test_at_most_two_connections_per_address(harness) -> None:
+    harness = harness()
+    first, second = _raw_tls(harness), _raw_tls(harness)
+    with pytest.raises(OSError):
+        third = _raw_tls(harness)
+        third.sendall(b"GET /ca.crt HTTP/1.1\r\nHost: x\r\n\r\n")
+        if third.recv(1) == b"":
+            raise ConnectionResetError
+    first.close()
+    second.close()
+    time.sleep(0.2)
+    status, _type, _body = harness.request("GET", "/ca.crt", token=False)
+    assert status == 200

@@ -61,8 +61,10 @@ BlueFerry's settings, Plugins > iOS Shortcuts bridge, or
   constant time. 30 requests per minute per address; after 5 failed tokens
   in 10 minutes the address is locked out for the rest of the window.
 - Limits: text 64 KB, images 10 MB (opt-in), other bodies 8 KB; bodies need
-  `Content-Length`; at most 8 connections, 15 s timeout, one request per
-  connection.
+  `Content-Length`; at most 8 connections and two per address, one request
+  per connection. Each request has a total deadline (20 s for handshake and
+  headers; a body gets 20 s more plus one second per 32 KiB), so a client
+  trickling bytes cannot hold a connection.
 - No request content is logged, and nothing is forwarded to the network:
   requests only reach the clipboard, the card and notifications.
   Notifications for the clipboard show the length, not the text.
