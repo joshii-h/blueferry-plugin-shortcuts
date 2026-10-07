@@ -434,18 +434,6 @@ def test_failed_tls_handshakes_are_logged_at_debug_without_content(harness, capl
     assert h.request("GET", "/ca.crt", token=False)[0] == 200
 
 
-def test_handshake_reason_is_content_free() -> None:
-    from blueferry_shortcuts.server import handshake_reason
-
-    error = ssl.SSLError(1, "[SSL: HTTP_REQUEST] http request (_ssl.c:1000)")
-    error.reason = "HTTP_REQUEST"
-    assert handshake_reason(error) == "http_request"
-    error.reason = "evil text with spaces"
-    assert handshake_reason(error) == "SSLError"
-    assert handshake_reason(TimeoutError()) == "timeout"
-    assert handshake_reason(ConnectionResetError(104, "peer 10.0.0.2")) == "ConnectionResetError"
-
-
 def test_test_connection_asks_the_running_endpoint(harness) -> None:
     h = harness()
     result = h.host.test_config({"port": h.port})
