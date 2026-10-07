@@ -11,6 +11,7 @@ import time
 import pytest
 from blueferry.plugin_api.testing import inline_service
 from blueferry_plugin_kit.lanserver.tls import CertificateStore
+from blueferry_plugin_kit.testing import FakeClipboard
 from fakehost import FakeHost
 
 from blueferry_shortcuts import load_manifest
@@ -20,23 +21,6 @@ from blueferry_shortcuts.settings import Settings, SettingsStore
 
 SECRET_TEXT = "geheim-4711-clipboard-content"
 PNG = b"\x89PNG\r\n\x1a\n" + b"\x00" * 64
-
-
-class FakeClipboard:
-    def __init__(self, current: str = "") -> None:
-        self.copies: list[tuple[bytes, str]] = []
-        self.current = current
-
-    def copy(self, data: bytes, mime: str) -> bool:
-        self.copies.append((data, mime))
-        return True
-
-    def copy_text(self, text: str) -> bool:
-        return self.copy(text.encode(), "text/plain;charset=utf-8")
-
-    def read_text(self, limit: int):
-        data = self.current.encode()
-        return None if len(data) > limit else self.current
 
 
 def _free_port() -> int:
