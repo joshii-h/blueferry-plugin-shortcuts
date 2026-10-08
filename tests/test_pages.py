@@ -63,9 +63,10 @@ def test_setup_page_in_plain_mode_and_without_a_shortcut_link() -> None:
                         "address": "http://192.168.1.4:47800", "plain_http": True,
                         "shortcut_url": "", "probe_url": ""})
     text = setup_page("en", view)[0].decode()
-    assert "(optional, recommended)" in text and "Skip for now" in text
+    assert "optional, recommended" in text and "Skip for now" in text
     assert "not set up on the PC yet" in text and "http://192.168.1.4:47800" in text
     assert 'data-secure-address="https://192.168.1.4:47801"' in text
+    assert '<p class="value" id="address" aria-labelledby="address-label">http://' in text
     assert "local network" in text and "the test in step 3" in text
 
 
@@ -90,3 +91,12 @@ def test_pc_page_states() -> None:
     assert b"port &lt;in use&gt;" in failed
     plain = pc_page("en", PcView("http://x/setup/n", "<svg/>", "1", "", "Home", 0, 0, 0))[0]
     assert "active in “Home”" in plain.decode()
+
+
+def test_setup_page_fits_a_phone() -> None:
+    text = setup_page("en", VIEW)[0].decode()
+    assert 'name="viewport" content="width=device-width,initial-scale=1"' in text
+    # Long values wrap instead of running off the screen.
+    assert "word-break:break-all" in STYLE and "overflow-wrap:break-word" in STYLE
+    assert "prefers-color-scheme:dark" in STYLE and "min-height:50px" in STYLE
+    assert "<input" not in text and f">{VIEW.token}</p>" in text

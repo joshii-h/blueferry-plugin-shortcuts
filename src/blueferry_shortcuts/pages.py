@@ -14,36 +14,67 @@ import html
 from dataclasses import dataclass
 
 STYLE = """
-:root{color-scheme:light dark;--fg:#1d1d1f;--bg:#f5f5f7;--card:#fff;--muted:#6e6e73;
---accent:#0a64d8;--ok:#1a7f37;--bad:#b42318;--line:#d2d2d7}
+:root{color-scheme:light dark;--fg:#1d1d1f;--bg:#f2f2f7;--card:#fff;--muted:#6e6e73;
+--accent:#0a64d8;--button:#0a64d8;--on-accent:#fff;--ok:#1a7f37;--bad:#b42318;--line:#d8d8de;
+--field:#f2f2f7;--note:#fff5e0;--note-line:#e8a317}
 @media (prefers-color-scheme:dark){:root{--fg:#f5f5f7;--bg:#000;--card:#1c1c1e;
---muted:#a1a1a6;--accent:#4c9bff;--ok:#3fb950;--bad:#ff6b5e;--line:#3a3a3c}}
+--muted:#a1a1a6;--accent:#4c9bff;--button:#1662d0;--ok:#3fb950;--bad:#ff6b5e;--line:#38383a;
+--field:#2c2c2e;--note:#3a2d10;--note-line:#e8a317}}
 *{box-sizing:border-box}
-body{margin:0;font:17px/1.45 -apple-system,system-ui,sans-serif;color:var(--fg);
-background:var(--bg);padding:16px}
+html{-webkit-text-size-adjust:100%;text-size-adjust:100%}
+body{margin:0;font:17px/1.47 -apple-system,BlinkMacSystemFont,system-ui,sans-serif;
+color:var(--fg);background:var(--bg);overflow-wrap:break-word;
+padding:16px max(16px,env(safe-area-inset-right)) 40px max(16px,env(safe-area-inset-left))}
 main{max-width:560px;margin:0 auto}
-h1{font-size:26px;margin:8px 0 4px}h2{font-size:20px;margin:0 0 8px}
-section,details{background:var(--card);border-radius:14px;padding:16px;margin:14px 0;
-border:1px solid var(--line)}
-section.done h2::after{content:" \\2705"}
-p,li{margin:6px 0}ol{padding-left:22px}
+h1{font-size:28px;line-height:1.2;margin:12px 0 8px;font-weight:700}
+h2{font-size:20px;line-height:1.3;margin:0 0 10px;font-weight:700;display:flex;
+align-items:center;flex-wrap:wrap;gap:6px 10px}
+.num{flex:none;display:inline-flex;align-items:center;justify-content:center;width:28px;
+height:28px;border-radius:50%;background:var(--button);color:var(--on-accent);
+font-size:15px;font-weight:700}
+.done .num{background:var(--ok);font-size:0}
+.done .num::after{content:"\\2713";font-size:16px}
+.tag{font-size:13px;font-weight:600;color:var(--muted);border:1px solid var(--line);
+border-radius:999px;padding:1px 9px}
+section,main>details{background:var(--card);border:1px solid var(--line);
+border-radius:16px;padding:18px 16px;margin:16px 0}
+p{margin:8px 0}
+ol,ul{margin:12px 0;padding-left:24px}
+li{margin:8px 0;padding-left:2px}
 .muted{color:var(--muted);font-size:15px}
-.button{display:block;width:100%;text-align:center;padding:14px;border-radius:12px;
-background:var(--accent);color:#fff;font-weight:600;text-decoration:none;border:0;
-font-size:17px;margin:10px 0;cursor:pointer}
-.button.secondary{background:transparent;color:var(--accent);border:1px solid var(--accent)}
-.field{display:flex;gap:8px;align-items:center;margin:6px 0 12px}
-.field input{flex:1;min-width:0;font:16px ui-monospace,Menlo,monospace;padding:12px;
-border-radius:10px;border:1px solid var(--line);background:var(--bg);color:var(--fg)}
-.field button{padding:12px 16px;border-radius:10px;border:0;background:var(--accent);
-color:#fff;font-weight:600;font-size:16px}
-label{font-weight:600}
-.state{font-weight:600}.ok{color:var(--ok)}.bad{color:var(--bad)}
-.warn{border-left:4px solid var(--bad);padding-left:10px}
+.button{display:flex;align-items:center;justify-content:center;width:100%;min-height:50px;
+margin:14px 0;padding:12px 16px;border:0;border-radius:12px;background:var(--button);
+color:var(--on-accent);font-family:inherit;font-size:17px;font-weight:600;line-height:1.25;
+text-align:center;text-decoration:none;cursor:pointer;-webkit-appearance:none;
+appearance:none;touch-action:manipulation}
+.button:active,.copy button:active{opacity:.7}
+.button.secondary{background:transparent;color:var(--accent);
+box-shadow:inset 0 0 0 1.5px var(--accent)}
+.copy{margin:14px 0}
+.label{display:block;font-size:15px;font-weight:600;margin:0 0 6px}
+.row{display:flex;gap:8px;align-items:stretch}
+.value{flex:1;min-width:0;margin:0;padding:11px 12px;border:1px solid var(--line);
+border-radius:10px;background:var(--field);
+font:15px/1.4 ui-monospace,SFMono-Regular,Menlo,monospace;word-break:break-all;
+-webkit-user-select:all;user-select:all}
+.copy button{flex:none;min-width:96px;min-height:46px;padding:0 14px;border:0;
+border-radius:10px;background:var(--button);color:var(--on-accent);font-family:inherit;
+font-size:16px;font-weight:600;cursor:pointer;-webkit-appearance:none;appearance:none;
+touch-action:manipulation}
+.state{font-weight:600;font-size:15px;margin:12px 0;padding:10px 12px;border-radius:10px;
+background:var(--field)}
+.state:empty{display:none}
+.ok{color:var(--ok)}.bad{color:var(--bad)}
+.note{background:var(--note);border-left:4px solid var(--note-line);border-radius:10px;
+padding:10px 12px;margin:12px 0;font-size:15px}
+.note p{margin:6px 0}
+section details{margin:10px 0}
+summary{font-weight:600;cursor:pointer;padding:4px 0}
+section summary{font-size:15px;font-weight:500;color:var(--accent)}
 .qr{background:#fff;display:inline-block;padding:8px;border-radius:8px}
-.qr svg{display:block;width:260px;height:260px}
-code{font-family:ui-monospace,Menlo,monospace;font-size:14px;word-break:break-all}
-summary{font-weight:600;cursor:pointer}
+.qr svg{display:block;width:260px;height:260px;max-width:100%}
+code{font-family:ui-monospace,SFMono-Regular,Menlo,monospace;font-size:14px;
+word-break:break-all}
 """
 
 SCRIPT = """
@@ -51,19 +82,19 @@ SCRIPT = """
 var d=document.body.dataset;
 function done(b){var t=b.textContent;b.textContent=d.copied;
 setTimeout(function(){b.textContent=t;},1500);}
-function fallback(b,i){i.removeAttribute('readonly');i.focus();
-i.setSelectionRange(0,i.value.length);try{document.execCommand('copy');done(b);}catch(e){}
-i.setAttribute('readonly','');}
+function select(v){var r=document.createRange(),s=window.getSelection();
+r.selectNodeContents(v);s.removeAllRanges();s.addRange(r);}
+function fallback(b,v){select(v);try{if(document.execCommand('copy')){done(b);}}catch(e){}}
 Array.prototype.forEach.call(document.querySelectorAll('[data-copy]'),function(b){
-b.addEventListener('click',function(){var i=document.getElementById(b.dataset.copy);
-if(navigator.clipboard&&window.isSecureContext){navigator.clipboard.writeText(i.value)
-.then(function(){done(b);},function(){fallback(b,i);});}else{fallback(b,i);}});});
+b.addEventListener('click',function(){var v=document.getElementById(b.dataset.copy);
+if(navigator.clipboard&&window.isSecureContext){navigator.clipboard.writeText(v.textContent)
+.then(function(){done(b);},function(){fallback(b,v);});}else{fallback(b,v);}});});
 var trusted=false,busy=false,state=document.getElementById('trust-state');
 function probe(){if(trusted||busy||!d.probe)return;busy=true;
 fetch(d.probe,{mode:'no-cors',cache:'no-store'}).then(function(){trusted=true;
 state.textContent=d.trusted;state.className='state ok';
-document.getElementById('step-cert').className='done';
-var a=document.getElementById('address');if(a&&d.secureAddress){a.value=d.secureAddress;}
+document.getElementById('step-cert').classList.add('done');
+var a=document.getElementById('address');if(a&&d.secureAddress){a.textContent=d.secureAddress;}
 },function(){}).then(function(){busy=false;if(!trusted){setTimeout(probe,3000);}});}
 probe();document.addEventListener('visibilitychange',function(){if(!document.hidden)probe();});
 var test=document.getElementById('test'),out=document.getElementById('test-state');
@@ -196,8 +227,8 @@ _SETUP = {
         "h1": "Set up BlueFerry on this iPhone",
         "intro": "Three steps, about three minutes. Keep this page open; it checks your "
                  "progress itself.",
-        "cert_h": "1. Install the certificate",
-        "cert_optional": " (optional, recommended)",
+        "cert_h": "Install the certificate",
+        "cert_optional": "optional, recommended",
         "cert_why": "So that iPhone and PC talk encrypted, the iPhone needs your PC's "
                     "certificate. Your PC created it itself, not a company, which is why iOS "
                     "calls the profile <i>Not Verified</i>. That is expected here.",
@@ -209,13 +240,15 @@ _SETUP = {
             "<b>Settings</b> &gt; <b>General</b> &gt; <b>About</b> &gt; at the very bottom "
             "<b>Certificate Trust Settings</b> &gt; switch on <b>{ca}</b> &gt; "
             "<b>Continue</b>.",
-            "Come back to Safari.",
+            "Come back to this page.",
         ],
         "cert_switch": "Why this extra switch? iOS asks for a second, deliberate "
                        "confirmation for every root certificate you install yourself, so "
                        "nobody can slip one in unnoticed. No app can skip it, and it is "
                        "needed only once.",
-        "fingerprint": "To compare (profile &gt; More Details &gt; SHA-256):",
+        "fingerprint_h": "Compare the fingerprint",
+        "fingerprint": "In the profile: <b>More Details</b> &gt; <b>SHA-256</b>. It must "
+                       "match:",
         "trust_wait": "Not trusted yet. This page checks automatically.",
         "trust_none": "Cannot check automatically here; the test in step 3 will show it.",
         "trusted": "Certificate trusted",
@@ -224,7 +257,7 @@ _SETUP = {
                       "clipboard: reading it always needs the certificate). With the "
                       "certificate it stays private.",
         "skip": "Skip for now",
-        "short_h": "2. Add the shortcut",
+        "short_h": "Add the shortcut",
         "short_button": "Add the “BlueFerry” shortcut",
         "short_intro": "While adding it, the Shortcuts app asks two questions. Copy the "
                        "answers here:",
@@ -239,7 +272,7 @@ _SETUP = {
                      "find devices on your local network: tap <b>Allow</b>.",
         "read_off": "“PC → Clipboard” works once you allow reading the PC clipboard in "
                     "BlueFerry's plugin settings, and only over the encrypted connection.",
-        "test_h": "3. Test",
+        "test_h": "Test",
         "test_button": "Test now",
         "test_hint": "Your PC shows “iPhone connected ✅”. Then try the shortcut "
                      "“BlueFerry” &gt; “Clipboard → PC”.",
@@ -261,8 +294,8 @@ _SETUP = {
         "h1": "BlueFerry auf diesem iPhone einrichten",
         "intro": "Drei Schritte, etwa drei Minuten. Lass diese Seite offen; sie prüft "
                  "selbst, wie weit du bist.",
-        "cert_h": "1. Zertifikat installieren",
-        "cert_optional": " (optional, empfohlen)",
+        "cert_h": "Zertifikat installieren",
+        "cert_optional": "optional, empfohlen",
         "cert_why": "Damit iPhone und PC verschlüsselt sprechen, braucht das iPhone das "
                     "Zertifikat deines PCs. Dein PC hat es selbst erzeugt, keine Firma, "
                     "deshalb nennt iOS das Profil <i>Nicht überprüft</i>. Das ist hier "
@@ -275,13 +308,15 @@ _SETUP = {
             "<b>Einstellungen</b> &gt; <b>Allgemein</b> &gt; <b>Info</b> &gt; ganz unten "
             "<b>Zertifikatsvertrauenseinstellungen</b> &gt; Schalter bei <b>{ca}</b> "
             "einschalten &gt; <b>Fortfahren</b>.",
-            "Zurück zu Safari.",
+            "Zurück zu dieser Seite.",
         ],
         "cert_switch": "Warum dieser zusätzliche Schalter? iOS verlangt für jedes selbst "
                        "installierte Stammzertifikat eine zweite, bewusste Bestätigung, damit "
                        "dir niemand unbemerkt eines unterschiebt. Keine App kann das "
                        "überspringen, und es ist nur einmal nötig.",
-        "fingerprint": "Zum Vergleichen (Profil &gt; Mehr Details &gt; SHA-256):",
+        "fingerprint_h": "Fingerabdruck vergleichen",
+        "fingerprint": "Im Profil: <b>Mehr Details</b> &gt; <b>SHA-256</b>. Er muss so "
+                       "lauten:",
         "trust_wait": "Noch nicht vertraut. Die Seite prüft automatisch.",
         "trust_none": "Hier nicht automatisch prüfbar; der Test in Schritt 3 zeigt es.",
         "trusted": "Zertifikat vertraut",
@@ -290,7 +325,7 @@ _SETUP = {
                       "mitlesen, was du sendest (nicht die PC-Zwischenablage: lesen geht "
                       "immer nur mit Zertifikat). Mit Zertifikat bleibt es privat.",
         "skip": "Vorerst überspringen",
-        "short_h": "2. Kurzbefehl hinzufügen",
+        "short_h": "Kurzbefehl hinzufügen",
         "short_button": "Kurzbefehl „BlueFerry“ hinzufügen",
         "short_intro": "Beim Hinzufügen stellt die Kurzbefehle-App zwei Fragen. Kopiere "
                        "die Antworten hier:",
@@ -306,7 +341,7 @@ _SETUP = {
         "read_off": "„PC → Zwischenablage“ geht, sobald du in BlueFerry in den "
                     "Plugin-Einstellungen das Lesen der PC-Zwischenablage erlaubst, und "
                     "nur über die verschlüsselte Verbindung.",
-        "test_h": "3. Testen",
+        "test_h": "Testen",
         "test_button": "Jetzt testen",
         "test_hint": "Dein PC zeigt „iPhone verbunden ✅“. Danach im Kurzbefehl "
                      "„BlueFerry“ &gt; „Zwischenablage → PC“ ausprobieren.",
@@ -326,25 +361,36 @@ _SETUP = {
 }
 
 
+def _copy_field(key: str, label: str, value: str, copy: str) -> str:
+    return (
+        f'<div class="copy"><span class="label" id="{key}-label">{label}</span>'
+        f'<div class="row"><p class="value" id="{key}" aria-labelledby="{key}-label">'
+        f"{_e(value)}</p>"
+        f'<button type="button" data-copy="{key}">{copy}</button></div></div>'
+    )
+
+
 def setup_page(lang: str, view: SetupView) -> tuple[bytes, str]:
     """The page and its Content-Security-Policy."""
     t = _SETUP[lang]
     steps = "".join(f"<li>{step.format(ca=_e(view.ca_name))}</li>" for step in t["cert_steps"])
     plain = (
-        f'<p class="warn">{t["plain_note"]}</p>'
+        f'<div class="note"><p>{t["plain_note"]}</p></div>'
         f'<a class="button secondary" href="#step-shortcut">{t["skip"]}</a>'
         if view.plain_http else ""
     )
     trust_text = t["trust_wait"] if view.probe_url else t["trust_none"]
+    optional = f' <span class="tag">{t["cert_optional"]}</span>' if view.plain_http else ""
+    download = f'<a class="button" href="/ca.mobileconfig">{t["cert_button"]}</a>'
     cert = (
-        f'<section id="step-cert"><h2>{t["cert_h"]}'
-        f'{t["cert_optional"] if view.plain_http else ""}</h2>'
-        f'<p>{t["cert_why"]}</p>'
-        f'<a class="button" href="/ca.mobileconfig">{t["cert_button"]}</a>'
+        f'<section id="step-cert"><h2><span class="num">1</span>{t["cert_h"]}{optional}</h2>'
+        f'<p>{t["cert_why"]}</p>{download}'
         f"<ol>{steps}</ol>"
         f'<p class="muted">{t["cert_switch"]}</p>'
-        f'<p id="trust-state" class="state">{trust_text}</p>'
-        f'<p class="muted">{t["fingerprint"]} <code>{_e(view.fingerprint)}</code></p>'
+        f'<p id="trust-state" class="state" aria-live="polite">{trust_text}</p>'
+        f'<details><summary>{t["fingerprint_h"]}</summary>'
+        f'<p class="muted">{t["fingerprint"]}</p>'
+        f'<p><code>{_e(view.fingerprint)}</code></p></details>'
         f"{plain}</section>"
     )
     if view.shortcut_url:
@@ -353,19 +399,16 @@ def setup_page(lang: str, view: SetupView) -> tuple[bytes, str]:
     else:
         add = f'<p>{t["short_missing"]}</p>'
     fields = "".join(
-        f'<label for="{key}">{t[key]}</label><div class="field">'
-        f'<input id="{key}" readonly value="{_e(value)}" autocomplete="off" '
-        f'autocapitalize="off" spellcheck="false">'
-        f'<button type="button" data-copy="{key}">{t["copy"]}</button></div>'
+        _copy_field(key, t[key], value, t["copy"])
         for key, value in (("address", view.address), ("token", view.token))
     )
     read_note = "" if view.clipboard_read else f'<p class="muted">{t["read_off"]}</p>'
     shortcut = (
-        f'<section id="step-shortcut"><h2>{t["short_h"]}</h2>{add}{fields}'
-        f'<p class="muted">{t["local_net"]}</p>{read_note}</section>'
+        f'<section id="step-shortcut"><h2><span class="num">2</span>{t["short_h"]}</h2>'
+        f'{add}{fields}<p class="muted">{t["local_net"]}</p>{read_note}</section>'
     )
     test = (
-        f'<section id="step-test"><h2>{t["test_h"]}</h2>'
+        f'<section id="step-test"><h2><span class="num">3</span>{t["test_h"]}</h2>'
         f'<button type="button" class="button" id="test">{t["test_button"]}</button>'
         f'<p id="test-state" class="state" aria-live="polite"></p>'
         f'<p class="muted">{t["test_hint"]}</p></section>'

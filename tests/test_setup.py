@@ -113,7 +113,7 @@ def test_setup_flow_from_card_to_test(harness, caplog) -> None:
     status, headers, body = _https(h, "GET", "/setup", headers={"Cookie": session})
     assert status == 200 and h.token.encode() in body
     assert "script-src 'sha256-" in headers["Content-Security-Policy"]
-    assert b"/ca.mobileconfig" in body
+    assert b'href="/ca.mobileconfig"' in body
     status, _headers, body = _https(h, "GET", "/setup")
     assert status == 403 and h.token.encode() not in body
 
@@ -278,7 +278,7 @@ def test_setup_link_uses_http_in_an_approved_network(harness) -> None:
                               headers={"Cookie": session, "Accept-Language": "de"})
     text = body.decode()
     assert status == 200 and "optional, empfohlen" in text
-    assert f'value="http://127.0.0.1:{port}"' in text
+    assert f'id="address" aria-labelledby="address-label">http://127.0.0.1:{port}<' in text
     assert f'data-secure-address="https://127.0.0.1:{h.port}"' in text
 
 
