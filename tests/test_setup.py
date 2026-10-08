@@ -114,6 +114,12 @@ def test_setup_flow_from_card_to_test(harness, caplog) -> None:
     assert status == 200 and h.token.encode() in body
     assert "script-src 'sha256-" in headers["Content-Security-Policy"]
     assert b'href="/ca.mobileconfig"' in body
+    firefox = ("Mozilla/5.0 (iPhone; CPU iPhone OS 18_0 like Mac OS X) AppleWebKit/605.1.15 "
+               "(KHTML, like Gecko) FxiOS/140.0 Mobile/15E148 Safari/605.1.15")
+    status, _headers, body = _https(h, "GET", "/setup",
+                                    headers={"Cookie": session, "User-Agent": firefox})
+    assert status == 200 and b'href="/ca.mobileconfig"' not in body
+    assert f'href="x-safari-https://127.0.0.1:{h.port}/ca.mobileconfig"'.encode() in body
     status, _headers, body = _https(h, "GET", "/setup")
     assert status == 403 and h.token.encode() not in body
 

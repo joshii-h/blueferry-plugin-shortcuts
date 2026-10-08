@@ -14,6 +14,7 @@ from blueferry_shortcuts.pages import (
     expired_page,
     home_page,
     language,
+    other_ios_browser,
     pc_page,
     setup_page,
 )
@@ -91,6 +92,41 @@ def test_pc_page_states() -> None:
     assert b"port &lt;in use&gt;" in failed
     plain = pc_page("en", PcView("http://x/setup/n", "<svg/>", "1", "", "Home", 0, 0, 0))[0]
     assert "active in “Home”" in plain.decode()
+
+
+SAFARI = ("Mozilla/5.0 (iPhone; CPU iPhone OS 18_0 like Mac OS X) AppleWebKit/605.1.15 "
+          "(KHTML, like Gecko) Version/18.0 Mobile/15E148 Safari/604.1")
+FIREFOX = ("Mozilla/5.0 (iPhone; CPU iPhone OS 18_0 like Mac OS X) AppleWebKit/605.1.15 "
+           "(KHTML, like Gecko) FxiOS/140.0 Mobile/15E148 Safari/605.1.15")
+
+
+def test_other_ios_browsers_are_recognised() -> None:
+    assert other_ios_browser(SAFARI) == ""
+    assert other_ios_browser(FIREFOX) == "Firefox"
+    assert other_ios_browser(SAFARI.replace("Version/18.0", "CriOS/130.0")) == "Chrome"
+    assert other_ios_browser(SAFARI.replace("Version/18.0", "EdgiOS/130.0")) == "Edge"
+    # An in-app browser (WKWebView without the Safari token) cannot install profiles either.
+    assert other_ios_browser(SAFARI.split(" Version/")[0]) == "*"
+    assert other_ios_browser("Mozilla/5.0 (X11; Linux x86_64) Firefox/140.0") == ""
+    assert other_ios_browser("") == ""
+
+
+def test_setup_page_sends_other_browsers_to_safari() -> None:
+    text = setup_page("de", VIEW, "Firefox")[0].decode()
+    assert "Diese Seite ist in Firefox offen" in text and "Profil in Safari öffnen" in text
+    sources = re.findall(r'(?:src|href)="([^"]+)"', text)
+    # No download link Firefox could choke on: Safari gets the absolute profile URL.
+    assert "/ca.mobileconfig" not in sources
+    assert sources[0] == "x-safari-https://192.168.1.4:47801/ca.mobileconfig"
+    assert ">https://192.168.1.4:47801/ca.mobileconfig</p>" in text
+    assert 'data-copy="profile"' in text and "Details einblenden" in text
+    generic = setup_page("en", VIEW, "*")[0].decode()
+    assert "open in another browser than Safari" in generic
+    plain_view = SetupView(**{**{f: getattr(VIEW, f) for f in VIEW.__slots__},
+                              "address": "http://192.168.1.4:47800", "plain_http": True})
+    plain = setup_page("en", plain_view, "Chrome")[0].decode()
+    assert 'href="x-safari-http://192.168.1.4:47800/ca.mobileconfig"' in plain
+    assert "Show Details" not in plain          # no certificate warning over plain HTTP
 
 
 def test_setup_page_fits_a_phone() -> None:

@@ -108,6 +108,9 @@ iPhone and PC must be in the same network.
    that the connection is not private: *Show Details* > *visit this website*
    > *Visit Website*. That is expected before the certificate is installed.
    The link works **once** and for **ten minutes**; the PC page renews it.
+   If the link opens in another browser (Firefox, Chrome, …), the page
+   offers *Open profile in Safari*: iOS installs profiles from Safari only,
+   and Firefox for iOS crashes when it downloads one.
 3. The setup page on the iPhone walks you through:
    - **Install the certificate**: *Download profile* > *Allow*, then
      *Settings* > *Profile Downloaded* > *Install*. Then the one step iOS
@@ -264,6 +267,9 @@ iPhone und PC müssen im selben Netz sein.
    einmal, die Verbindung sei nicht privat: *Details einblenden* > *diese
    Website besuchen* > *Website besuchen*. Das ist vor dem Zertifikat normal.
    Der Link gilt **einmal** und **zehn Minuten**; die PC-Seite erneuert ihn.
+   Öffnet sich der Link in einem anderen Browser (Firefox, Chrome, …), bietet
+   die Seite *Profil in Safari öffnen* an: iOS installiert Profile nur aus
+   Safari, und Firefox für iOS stürzt beim Laden eines Profils ab.
 3. Die Einrichtungsseite auf dem iPhone führt durch:
    - **Zertifikat installieren**: *Profil laden* > *Erlauben*, dann
      *Einstellungen* > *Profil geladen* > *Installieren*. Danach der eine

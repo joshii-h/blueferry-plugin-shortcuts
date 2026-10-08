@@ -377,7 +377,9 @@ class _Handler(DeadlineRequestHandler):
                     self.server.limiter.failed(client)
                 self._html(403, pages.expired_page(lang), pages.csp(script=False))
                 return
-            body, policy = pages.setup_page(lang, endpoints.setup_view(self.server.secure))
+            browser = pages.other_ios_browser(self.headers.get("User-Agent", "")[:512])
+            body, policy = pages.setup_page(
+                lang, endpoints.setup_view(self.server.secure), browser)
             self._html(200, body, policy)
             return
         nonce = path[len("/setup/"):]

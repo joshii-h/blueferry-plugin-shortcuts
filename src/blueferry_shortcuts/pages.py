@@ -257,6 +257,17 @@ _SETUP = {
                       "clipboard: reading it always needs the certificate). With the "
                       "certificate it stays private.",
         "skip": "Skip for now",
+        "other": "This page is open in {browser}. iOS installs profiles from Safari only, "
+                 "and other browsers can crash while downloading one. So open the profile "
+                 "in Safari:",
+        "other_generic": "another browser than Safari",
+        "other_button": "Open profile in Safari",
+        "other_copy": "If nothing happens: copy this link, open Safari and paste it into "
+                      "the address bar.",
+        "other_warning": "Safari warns once that the connection is not private: tap "
+                         "<b>Show Details</b> &gt; <b>visit this website</b> &gt; "
+                         "<b>Visit Website</b>.",
+        "profile_link": "Profile link",
         "short_h": "Add the shortcut",
         "short_button": "Add the “BlueFerry” shortcut",
         "short_intro": "While adding it, the Shortcuts app asks two questions. Copy the "
@@ -325,6 +336,17 @@ _SETUP = {
                       "mitlesen, was du sendest (nicht die PC-Zwischenablage: lesen geht "
                       "immer nur mit Zertifikat). Mit Zertifikat bleibt es privat.",
         "skip": "Vorerst überspringen",
+        "other": "Diese Seite ist in {browser} offen. iOS installiert Profile nur aus "
+                 "Safari, und andere Browser können beim Laden eines Profils abstürzen. "
+                 "Öffne das Profil darum in Safari:",
+        "other_generic": "einem anderen Browser als Safari",
+        "other_button": "Profil in Safari öffnen",
+        "other_copy": "Falls nichts passiert: Link kopieren, Safari öffnen und in die "
+                      "Adressleiste einfügen.",
+        "other_warning": "Safari warnt einmal, die Verbindung sei nicht privat: "
+                         "<b>Details einblenden</b> &gt; <b>diese Website besuchen</b> &gt; "
+                         "<b>Website besuchen</b>.",
+        "profile_link": "Profil-Link",
         "short_h": "Kurzbefehl hinzufügen",
         "short_button": "Kurzbefehl „BlueFerry“ hinzufügen",
         "short_intro": "Beim Hinzufügen stellt die Kurzbefehle-App zwei Fragen. Kopiere "
@@ -361,6 +383,28 @@ _SETUP = {
 }
 
 
+_OTHER_BROWSERS = (
+    ("FxiOS/", "Firefox"), ("CriOS/", "Chrome"), ("EdgiOS/", "Edge"), ("OPiOS/", "Opera"),
+    ("OPT/", "Opera"), ("DuckDuckGo/", "DuckDuckGo"), ("GSA/", "Google"),
+)
+
+
+def other_ios_browser(user_agent: str) -> str:
+    """The iOS browser that is not Safari, from the ``User-Agent``.
+
+    ``""`` for Safari and for anything that is not iOS; a name such as
+    ``"Firefox"``, or ``"*"`` for an unknown in-app browser (no ``Safari/``
+    token). Only Safari can install configuration profiles on iOS, and
+    Firefox for iOS crashes when it downloads one.
+    """
+    for token, name in _OTHER_BROWSERS:
+        if token in user_agent:
+            return name
+    if not any(device in user_agent for device in ("iPhone", "iPad", "iPod")):
+        return ""
+    return "" if "Safari/" in user_agent else "*"
+
+
 def _copy_field(key: str, label: str, value: str, copy: str) -> str:
     return (
         f'<div class="copy"><span class="label" id="{key}-label">{label}</span>'
@@ -370,8 +414,12 @@ def _copy_field(key: str, label: str, value: str, copy: str) -> str:
     )
 
 
-def setup_page(lang: str, view: SetupView) -> tuple[bytes, str]:
-    """The page and its Content-Security-Policy."""
+def setup_page(lang: str, view: SetupView, browser: str = "") -> tuple[bytes, str]:
+    """The page and its Content-Security-Policy.
+
+    ``browser`` comes from :func:`other_ios_browser`: when set, the page
+    sends the profile to Safari instead of downloading it here.
+    """
     t = _SETUP[lang]
     steps = "".join(f"<li>{step.format(ca=_e(view.ca_name))}</li>" for step in t["cert_steps"])
     plain = (
@@ -381,7 +429,19 @@ def setup_page(lang: str, view: SetupView) -> tuple[bytes, str]:
     )
     trust_text = t["trust_wait"] if view.probe_url else t["trust_none"]
     optional = f' <span class="tag">{t["cert_optional"]}</span>' if view.plain_http else ""
-    download = f'<a class="button" href="/ca.mobileconfig">{t["cert_button"]}</a>'
+    if browser:
+        profile = f"{view.address}/ca.mobileconfig"
+        name = t["other_generic"] if browser == "*" else _e(browser)
+        warning = (f'<p class="muted">{t["other_warning"]}</p>'
+                   if profile.startswith("https://") else "")
+        download = (
+            f'<div class="note"><p>{t["other"].format(browser=name)}</p></div>'
+            f'<a class="button" href="x-safari-{_e(profile)}">{t["other_button"]}</a>'
+            f'{_copy_field("profile", t["profile_link"], profile, t["copy"])}'
+            f'<p class="muted">{t["other_copy"]}</p>{warning}'
+        )
+    else:
+        download = f'<a class="button" href="/ca.mobileconfig">{t["cert_button"]}</a>'
     cert = (
         f'<section id="step-cert"><h2><span class="num">1</span>{t["cert_h"]}{optional}</h2>'
         f'<p>{t["cert_why"]}</p>{download}'
