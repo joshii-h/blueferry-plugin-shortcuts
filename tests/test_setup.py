@@ -84,6 +84,11 @@ def test_root_is_a_friendly_page_without_secrets(harness) -> None:
     status, headers, body = _https(h, "GET", "/ca.mobileconfig")
     assert status == 200 and headers["Content-Type"] == "application/x-apple-aspen-config"
     assert b"com.apple.security.root" in body
+    # A complete, plain download: exact length, no chunking, a file name; HEAD agrees.
+    assert headers["Content-Length"] == str(len(body)) and "Transfer-Encoding" not in headers
+    assert headers["Content-Disposition"] == 'attachment; filename="BlueFerry.mobileconfig"'
+    status, head, empty = _https(h, "HEAD", "/ca.mobileconfig")
+    assert status == 200 and empty == b"" and head["Content-Length"] == str(len(body))
 
 
 # ---- the guided setup ------------------------------------------------------------------
