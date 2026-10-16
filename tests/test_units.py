@@ -28,11 +28,11 @@ from blueferry_shortcuts.surfaces import language
 
 def test_manifest_declares_the_surfaces_and_the_guided_settings() -> None:
     text = manifest_text()
-    assert "ApiVersion=1.3" in text and "Capabilities=card;notify;" in text
+    assert "ApiVersion=1.5" in text and "Capabilities=card;notify;" in text
     manifest = load_manifest()
     assert manifest.id == PLUGIN_ID
     assert manifest.capabilities == ("card", "notify")
-    assert manifest.api_minor == 3 and manifest.config_test and not manifest.config_login
+    assert manifest.api_minor == 5 and manifest.config_test and not manifest.config_login
     fields = {field.key: field for field in manifest.config}
     assert list(fields) == ["bind_address", "allow_all_interfaces", "port", "token",
                             "allow_clipboard_read", "accept_images", "shortcut_url",
@@ -69,11 +69,26 @@ def test_surface_members_live_on_plugin1() -> None:
     ]
     assert set(table) - {"org.freedesktop.DBus.Introspectable"} == {PLUGIN_INTERFACE}
     members = table[PLUGIN_INTERFACE]
-    for name in ("GetInfo", "Status", "GetConfig", "SetConfig",
-                 "GetCardItems", "InvokeAction", "CardChanged", "Notify"):
+    for name in ("GetInfo", "Status", "GetConfig", "SetConfig", "GetCardItems",
+                 "InvokeAction", "CardChanged", "NotifyChanged", "GetPendingNotification"):
         assert name in members, name
-    assert members["Notify"]._dbus_signature == "sssss"
     assert members["InvokeAction"]._dbus_in_signature == "sss"
+    # The plugin's own synchronous InvokeAction/GetCardItems win over the
+    # asynchronous ones NotifyService inherits.
+    assert members["InvokeAction"] is ShortcutsService.__dict__["InvokeAction"]
+    assert members["GetCardItems"] is ShortcutsService.__dict__["GetCardItems"]
+
+
+def test_popups_are_content_free_on_the_bus() -> None:
+    """Plugin API 1.5: the 1.2 signal Notify(sssss) is gone; NotifyChanged
+    carries nothing and the text is fetched with GetPendingNotification."""
+    members = ShortcutsService._dbus_class_table[
+        f"{ShortcutsService.__module__}.{ShortcutsService.__name__}"
+    ][PLUGIN_INTERFACE]
+    assert "Notify" not in members
+    assert not hasattr(ShortcutsService, "Notify")
+    assert members["NotifyChanged"]._dbus_signature == ""
+    assert members["GetPendingNotification"]._dbus_out_signature == "s"
 
 
 # ---- settings ---------------------------------------------------------------------

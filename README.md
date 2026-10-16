@@ -5,7 +5,7 @@ iOS Shortcuts bridge for BlueFerry: clipboard, links and battery from your iPhon
 A plugin for [BlueFerry](https://github.com/joshii-h/blueferry). iOS
 Shortcuts can send HTTP requests; this plugin is the receiver on the PC. It
 runs a small HTTPS endpoint in your LAN and shows what arrives through
-BlueFerry's generic plugin surfaces (plugin API 1.2, settings form 1.3): a **card** on the
+BlueFerry's generic plugin surfaces (plugin API 1.5): a **card** on the
 phone page and desktop **notifications**. It runs as its own process on the
 session bus and talks to BlueFerry only through `blueferry.plugin_api`.
 
@@ -26,7 +26,12 @@ blueferry plugins install https://github.com/joshii-h/blueferry-plugin-shortcuts
 ```
 
 or pick "iOS Shortcuts bridge" in BlueFerry's settings, Plugins. This needs a
-BlueFerry whose clients understand plugin API 1.2 (`card`, `notify`).
+BlueFerry whose clients understand plugin API 1.5; older ones ignore the
+plugin. Since 1.5 the popup text (clipboard size, link host) no longer
+travels on the session bus: the plugin only emits the content-free
+`NotifyChanged` signal and BlueFerry fetches the popup with
+`GetPendingNotification`, so other processes on the bus cannot read it.
+Version 0.4.0 (unreleased) is the first one built for API 1.5.
 
 The endpoint must be running for the iPhone to reach it. BlueFerry starts
 the plugin through D-Bus when it shows the phone card. To have it running
@@ -435,11 +440,12 @@ python3 -m venv --system-site-packages .venv   # dbus-python, PyGObject from the
 BlueFerry repository. The clipboard helper, the listen-address choice, the
 owner-only files, the certificates and the hardened HTTPS server come from
 the shared [blueferry-plugin-kit](https://github.com/joshii-h/blueferry-plugin-kit)
-(tag `kit-v0.3.0`, extra `lanserver`); the routes stay in this plugin.
+(tag `kit-v0.4.0`, extra `lanserver`); the routes stay in this plugin.
 The QR code comes from [segno](https://pypi.org/project/segno/).
 Tests run the real HTTPS server on localhost with the plugin's CA, and the
 kit's fake clipboard and fake host, which checks every card reply against
-the 1.2 limits. The
+the 1.2 limits and fetches popups the 1.5 way (`NotifyChanged`, then
+`GetPendingNotification`). The
 Shortcuts steps above have not been verified on an iPhone yet; the
 NetworkManager rules are tested against a fake NetworkManager.
 

@@ -202,6 +202,32 @@ def test_link_notification_opens_through_invoke_action(harness) -> None:
         assert h.request("POST", "/link", {"url": bad})[0] == 400, bad
 
 
+def test_popup_arrives_through_notify_changed_and_get_pending(harness) -> None:
+    """Plugin API 1.5: the signal carries nothing; the host fetches the popup."""
+    h = harness()
+    signals: list[tuple] = []
+    fetch = h.host._on_notify_changed
+
+    def on_notify_changed(*args) -> None:
+        signals.append(args)
+        fetch(*args)
+
+    h.service.NotifyChanged = on_notify_changed
+    assert h.request("POST", "/link", {"url": "https://example.org/a?b=c"})[0] == 200
+    assert signals == [()]
+    title, body, icon, label, action = h.host.notifications[-1]
+    assert (title, body, icon, label) == (
+        "Link vom iPhone", "example.org", "internet-web-browser", "Öffnen",
+    ) and action
+    # Fetched once: the queue is empty now.
+    assert json.loads(h.host.call("GetPendingNotification")) == {
+        "notification": None, "more": False,
+    }
+    # The popup button still reaches the plugin as item "notify".
+    assert h.host.invoke("notify", action)["open_uri"] == "https://example.org/a?b=c"
+    assert not hasattr(h.service, "_notify")
+
+
 def test_links_lose_their_user_info_before_blueferry_sees_them(harness, caplog) -> None:
     caplog.set_level(logging.DEBUG)
     h = harness()

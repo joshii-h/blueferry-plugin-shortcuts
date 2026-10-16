@@ -2,8 +2,12 @@
 
 Threads: D-Bus calls arrive on the GLib main loop; HTTPS requests on the
 server's connection threads; settings changes on the plugin worker.
-Signals (``CardChanged``, ``Notify``) are always emitted from the main
-loop through ``_to_main``. Shared state sits behind one lock.
+Signals (``CardChanged``, ``NotifyChanged``) are always emitted from the
+main loop through ``_to_main``. Popups (plugin API 1.5) go through
+:class:`~blueferry.plugin_api.service.NotifyService`: the text waits in the
+plugin and BlueFerry fetches it with ``GetPendingNotification()`` after the
+content-free ``NotifyChanged()``, so clipboard sizes and link hosts never
+travel on the session bus. Shared state sits behind one lock.
 """
 from __future__ import annotations
 
@@ -24,7 +28,7 @@ import dbus.service
 from blueferry.plugin_api.config import ConfigError
 from blueferry.plugin_api.config_flow import ConfigTestResult
 from blueferry.plugin_api.manifest import PluginManifest
-from blueferry.plugin_api.service import PluginCallError, PluginService
+from blueferry.plugin_api.service import NotifyService, PluginCallError
 from blueferry_plugin_kit import netaddr
 from blueferry_plugin_kit.clipboard import Clipboard
 from blueferry_plugin_kit.configtest import failed, passed
@@ -125,7 +129,15 @@ def mask_token(token: str) -> str:
     return "".join("-" if ch == "-" else "•" for ch in head) + "-" + tail
 
 
-class ShortcutsService(PluginService):
+class ShortcutsService(NotifyService):
+    """The plugin's D-Bus object.
+
+    ``NotifyService`` brings the popup queue, ``NotifyChanged`` and
+    ``GetPendingNotification``. ``GetCardItems``, ``InvokeAction`` and
+    ``CardChanged`` are defined here and take precedence over the inherited
+    ones; a click on a popup button arrives as ``InvokeAction("notify", …)``.
+    """
+
     def __init__(
         self,
         manifest: PluginManifest,
@@ -310,15 +322,15 @@ class ShortcutsService(PluginService):
 
     def on_clipboard_text(self, text: str) -> None:
         self._clipboard.copy_text(text)
-        self._notify(self._t["clipboard_title"],
-                     self._t["clipboard_text"].format(count=len(text)), "edit-paste")
+        self.emit_notify(self._t["clipboard_title"],
+                         self._t["clipboard_text"].format(count=len(text)), "edit-paste")
 
     def on_clipboard_image(self, data: bytes, mime: str) -> None:
         self._clipboard.copy(data, mime)
         body = self._t["clipboard_image"].format(
             kind=mime.split("/", 1)[1].upper(), size=_size(len(data)),
         )
-        self._notify(self._t["clipboard_title"], body, "edit-paste")
+        self.emit_notify(self._t["clipboard_title"], body, "edit-paste")
 
     def read_clipboard(self, limit: int) -> str | None:
         return self._clipboard.read_text(limit)
@@ -342,8 +354,8 @@ class ShortcutsService(PluginService):
                 else _host_of(url))
         if removed:
             log.info("link received; sign-in data removed")
-        self._notify(self._t["link_title"], body, "internet-web-browser",
-                     self._t["open"], action_id)
+        self.emit_notify(self._t["link_title"], body, "internet-web-browser",
+                         self._t["open"], action_id)
 
     def on_battery(self, level: int, charging: bool | None) -> None:
         """``charging`` None: keep the last known state (a timed report cannot tell)."""
@@ -429,7 +441,7 @@ class ShortcutsService(PluginService):
     def on_setup_test(self) -> None:
         with self._lock:
             self._progress["tested"] = True
-        self._notify(self._t["connected_title"], self._t["connected_body"], "phone")
+        self.emit_notify(self._t["connected_title"], self._t["connected_body"], "phone")
         self._card_changed()
 
     def _save_state(self) -> None:
@@ -558,20 +570,12 @@ class ShortcutsService(PluginService):
 
     # ---- signals ---------------------------------------------------------------
 
-    def _notify(self, title: str, body: str, icon: str,
-                action_label: str = "", action_id: str = "") -> None:
-        self._to_main(lambda: self.Notify(title, body, icon, action_label, action_id))
-
     def _card_changed(self) -> None:
         self._to_main(self.CardChanged)
 
     @dbus.service.signal(SURFACES_INTERFACE, signature="")
     def CardChanged(self) -> None:
         """Content-free: the host calls GetCardItems again."""
-
-    @dbus.service.signal(SURFACES_INTERFACE, signature="sssss")
-    def Notify(self, title, body, icon, action_label, action_id) -> None:
-        """A desktop notification through the host's notification policy."""
 
     # ---- card ------------------------------------------------------------------
 

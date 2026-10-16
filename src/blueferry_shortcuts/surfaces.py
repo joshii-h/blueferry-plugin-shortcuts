@@ -1,8 +1,11 @@
-"""Plugin API 1.2 surfaces (``card``, ``notify``) as this plugin uses them.
+"""Plugin API surfaces (``card``, ``notify``) as this plugin uses them.
 
-All 1.2 methods and signals live on the existing ``Plugin1`` interface at
-the plugin's object path (spec: "D-Bus placement"); there are no separate
-card or notify interfaces. The limits follow the 1.2 spec.
+All surface methods and signals live on the existing ``Plugin1`` interface
+at the plugin's object path (spec: "D-Bus placement"); there are no
+separate card or notify interfaces. The card limits follow the 1.2 spec.
+Popups use the 1.5 form (``NotifyChanged`` plus ``GetPendingNotification``)
+provided by ``blueferry.plugin_api.service.NotifyService``; this module only
+holds the item id a popup button click arrives with.
 """
 from __future__ import annotations
 
@@ -11,7 +14,8 @@ from dataclasses import dataclass, field
 
 from blueferry.plugin_api import PLUGIN_INTERFACE
 
-# GetCardItems, InvokeAction, CardChanged and Notify are Plugin1 members.
+# GetCardItems, InvokeAction, CardChanged, NotifyChanged and
+# GetPendingNotification are Plugin1 members.
 SURFACES_INTERFACE = PLUGIN_INTERFACE
 
 MAX_ITEMS = 8
@@ -19,6 +23,7 @@ MAX_ACTIONS = 3
 MAX_TITLE = 80
 MAX_SUBTITLE = 160
 MAX_LABEL = 40
+# InvokeAction item id of a click on a popup button.
 NOTIFY_ITEM = "notify"
 
 
