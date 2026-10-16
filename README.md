@@ -31,7 +31,7 @@ plugin. Since 1.5 the popup text (clipboard size, link host) no longer
 travels on the session bus: the plugin only emits the content-free
 `NotifyChanged` signal and BlueFerry fetches the popup with
 `GetPendingNotification`, so other processes on the bus cannot read it.
-Version 0.4.0 (unreleased) is the first one built for API 1.5.
+Version 0.4.0 (2026-10-16) is the first one built for API 1.5.
 
 The endpoint must be running for the iPhone to reach it. BlueFerry starts
 the plugin through D-Bus when it shows the phone card. To have it running
