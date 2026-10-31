@@ -232,6 +232,8 @@ class ShortcutsService(NotifyService):
             return
         with self._lock:
             self._settings, self._token = settings, token
+        if settings.play_on_pc:
+            self._refresh_player_tools()
         try:
             self._serve(settings)
         except (netaddr.AddressError, OSError, ValueError) as error:
@@ -287,6 +289,9 @@ class ShortcutsService(NotifyService):
         self._stopping.set()
         self._bridge.stop()
         self._page.stop()
+        # A player left running would be orphaned: the next start opens a
+        # second window next to it.
+        self._player.stop()
         with self._lock:
             if self._reveal_timer is not None:
                 self._reveal_timer.cancel()
@@ -994,7 +999,17 @@ class ShortcutsService(NotifyService):
             if token is not None:
                 self._token = str(token)
         self.update_plain_http()
+        self._refresh_player_tools()
         self._card_changed()
+
+    def _refresh_player_tools(self) -> None:
+        """Look for mpv and yt-dlp again (after a settings change, the user
+        may just have installed them), off the main loop."""
+        def refresh() -> None:
+            self._player.refresh_tools()
+            self._card_changed()
+
+        self._run_async(refresh)
 
     def _approve_on_enable(
         self, networks: tuple[tuple[str, str], ...],

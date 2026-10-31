@@ -17,6 +17,8 @@ Safety rules, all enforced here:
   symlink); mpv is started with umask 077 and the socket is set to 0600.
   Without ``XDG_RUNTIME_DIR`` there is no socket: a new link then restarts
   the player and pause is unavailable.
+  A socket is removed when its mpv exits; sockets nobody listens on (left
+  by a crash) are removed before a new player starts.
 - At most :data:`PLAYS_PER_MINUTE` new links per minute.
 - Nothing here logs the link.
 """
@@ -48,6 +50,8 @@ MAX_IPC_REPLY = 1024 * 1024
 MAX_OPTIONS = 8
 MAX_OPTIONS_LENGTH = 300
 SOCKET_DIR = "blueferry-shortcuts"
+SOCKET_WAIT_S = 1.0     # how long a command waits for a new mpv's socket
+SOCKET_POLL_S = 0.05
 
 # yt-dlp format strings per quality setting ("Video quality" in the form).
 QUALITIES: dict[str, str] = {
@@ -90,6 +94,10 @@ _MPRIS_GLOBS = (
     "/usr/lib*/mpv/mpris*.so",
     "/usr/local/lib*/mpv/mpris*.so",
 )
+
+
+class MpvError(ValueError):
+    """mpv answered, but with an error (unlike a broken connection)."""
 
 
 class PlayerError(Exception):
@@ -181,7 +189,7 @@ def mpv_command(path: str, command: list, timeout: float = IPC_TIMEOUT_S) -> obj
                 if not isinstance(reply, dict) or reply.get("request_id") != 1:
                     continue   # an event
                 if reply.get("error") != "success":
-                    raise ConnectionError(f"mpv: {reply.get('error')}")
+                    raise MpvError(f"mpv: {reply.get('error')}")
                 return reply.get("data")
 
 
@@ -220,7 +228,12 @@ def private_socket_path(runtime_dir: str | None) -> str | None:
 
 
 class Player:
-    """mpv for links from the iPhone; thread-safe."""
+    """mpv for links from the iPhone; thread-safe.
+
+    Two locks: ``_command_lock`` serialises play, pause and stop, which may
+    wait for mpv's IPC (seconds); ``_state_lock`` only guards the fields the
+    card and the status read, so those never wait for mpv.
+    """
 
     def __init__(
         self,
@@ -232,6 +245,7 @@ class Player:
         runtime_dir: str | None = None,
         clock: Callable[[], float] = time.monotonic,
         on_change: Callable[[], None] = lambda: None,
+        socket_wait: float = SOCKET_WAIT_S,
     ) -> None:
         self._spawn = spawn
         self._ipc = ipc
@@ -240,41 +254,62 @@ class Player:
         self._runtime_dir = (runtime_dir if runtime_dir is not None
                              else os.environ.get("XDG_RUNTIME_DIR", ""))
         self._clock = clock
+        self._socket_wait = socket_wait
         self.on_change = on_change
-        self._lock = threading.Lock()
+        self._command_lock = threading.Lock()
+        self._state_lock = threading.Lock()
         self._process: Process | None = None
         self._socket: str | None = None
+        self._started_at = 0.0          # time.monotonic() of the last spawn
         self._plays: collections.deque[float] = collections.deque()
         self._host = ""
+        self._tools: Tools | None = None
 
     # ---- state --------------------------------------------------------------
 
     def tools(self) -> Tools:
+        """The tools found last time (looked up once, then cached: the card
+        asks on every render). :meth:`refresh_tools` looks again."""
+        with self._state_lock:
+            tools = self._tools
+        return tools if tools is not None else self.refresh_tools()
+
+    def refresh_tools(self) -> Tools:
         mpv = self._which("mpv")
         ytdlp = self._which("yt-dlp") or self._which("youtube-dl")
-        return Tools(mpv, ytdlp, self._mpris())
+        tools = Tools(mpv, ytdlp, self._mpris())
+        with self._state_lock:
+            self._tools = tools
+        return tools
 
     def playing(self) -> bool:
-        with self._lock:
+        with self._state_lock:
             return self._alive()
 
     @property
     def host(self) -> str:
         """Host of what plays now (shown on the card), never the full link."""
-        with self._lock:
+        with self._state_lock:
             return self._host if self._alive() else ""
 
     def _alive(self) -> bool:
         return self._process is not None and self._process.poll() is None
 
+    def _snapshot(self) -> tuple[Process | None, str | None]:
+        """The live process and its socket, or (None, None)."""
+        with self._state_lock:
+            if not self._alive():
+                return None, None
+            return self._process, self._socket
+
     # ---- commands -----------------------------------------------------------
 
     def play(self, url: str, host: str, options: PlayOptions) -> bool:
         """Play ``url``; True when it replaced what was playing."""
-        tools = self.tools()
+        tools = self.refresh_tools()
         if tools.mpv is None:
             raise PlayerError("mpv-missing")
-        with self._lock:
+        with self._command_lock:
             now = self._clock()
             while self._plays and now - self._plays[0] >= 60:
                 self._plays.popleft()
@@ -282,15 +317,19 @@ class Player:
                 raise PlayerError("play-rate-limited")
             self._plays.append(now)
             fmt = QUALITIES.get(options.quality, QUALITIES[DEFAULT_QUALITY])
-            if self._alive() and self._socket and self._replace(url, fmt, options):
-                self._host = host
+            process, path = self._snapshot()
+            if process is not None and path and self._replace(path, url, fmt, options):
+                with self._state_lock:
+                    self._host = host
                 return True
-            self._stop_locked()
-            self._socket = private_socket_path(self._runtime_dir)
+            self._stop_unlocked()
+            new_socket = private_socket_path(self._runtime_dir)
+            if new_socket:
+                remove_stale_sockets(os.path.dirname(new_socket))
             argv = [tools.mpv, "--no-terminal", "--force-window=immediate", "--idle=no",
                     "--ytdl=yes", f"--ytdl-format={fmt}"]
-            if self._socket:
-                argv.append(f"--input-ipc-server={self._socket}")
+            if new_socket:
+                argv.append(f"--input-ipc-server={new_socket}")
             if options.fullscreen:
                 argv.append("--fullscreen")
             if options.quality == "audio":
@@ -298,68 +337,94 @@ class Player:
             argv += list(options.extra)
             argv += ["--", url]
             try:
-                self._process = self._spawn(argv, self._exited)
+                process = self._spawn(argv, lambda: self._exited(new_socket))
             except OSError:
-                self._process = None
                 raise PlayerError("mpv-failed") from None
-            self._host = host
+            with self._state_lock:
+                self._process, self._socket, self._host = process, new_socket, host
+                self._started_at = time.monotonic()
         log.info("playback started")
         self.on_change()
         return False
 
-    def _command(self, command: list) -> object:
+    def _wait_for_socket(self, path: str) -> None:
+        """Right after the start mpv has not made its socket yet: wait a
+        little (polling) instead of failing."""
+        with self._state_lock:
+            deadline = self._started_at + self._socket_wait
+        while not os.path.exists(path) and time.monotonic() < deadline:
+            if not self.playing():
+                return
+            time.sleep(SOCKET_POLL_S)
+
+    def _command(self, path: str, command: list) -> object:
         """One IPC command; the socket is tightened to 0600 on first use."""
-        assert self._socket is not None
+        self._wait_for_socket(path)
         try:
-            if stat.S_IMODE(os.lstat(self._socket).st_mode) != 0o600:
-                os.chmod(self._socket, 0o600)
+            if stat.S_IMODE(os.lstat(path).st_mode) != 0o600:
+                os.chmod(path, 0o600)
         except FileNotFoundError:
             pass
-        return self._ipc(self._socket, command)
+        return self._ipc(path, command)
 
-    def _replace(self, url: str, fmt: str, options: PlayOptions) -> bool:
+    def _replace(self, path: str, url: str, fmt: str, options: PlayOptions) -> bool:
         try:
-            self._command(["set_property", "ytdl-format", fmt])
-            self._command(["set_property", "fullscreen", options.fullscreen])
-            self._command(["set_property", "vid", "no" if options.quality == "audio" else "auto"])
-            self._command(["loadfile", url, "replace"])
-            self._command(["set_property", "pause", False])
+            self._command(path, ["set_property", "ytdl-format", fmt])
+            self._command(path, ["set_property", "fullscreen", options.fullscreen])
+            self._command(path, ["set_property", "vid",
+                                 "no" if options.quality == "audio" else "auto"])
+            self._apply_extra(path, options.extra)
+            self._command(path, ["loadfile", url, "replace"])
+            self._command(path, ["set_property", "pause", False])
         except (OSError, ValueError):
             log.debug("mpv IPC failed; starting a new player")
             return False
         return True
 
+    def _apply_extra(self, path: str, extra: Sequence[str]) -> None:
+        """The extra options for a player that keeps running: each one as
+        mpv's ``set`` (or ``apply-profile``). One mpv refuses at runtime
+        is skipped; a broken connection propagates."""
+        for option in extra:
+            try:
+                self._command(path, runtime_command(option))
+            except MpvError:
+                log.debug("mpv did not take an option at runtime")
+
     def toggle_pause(self) -> bool:
         """Pause or resume; returns whether it is paused now."""
-        with self._lock:
-            if not self._alive():
+        with self._command_lock:
+            process, path = self._snapshot()
+            if process is None:
                 raise PlayerError("not-playing")
-            if not self._socket:
+            if not path:
                 raise PlayerError("player-unreachable")
             try:
-                self._command(["cycle", "pause"])
-                paused = self._command(["get_property", "pause"])
+                self._command(path, ["cycle", "pause"])
+                paused = self._command(path, ["get_property", "pause"])
             except (OSError, ValueError):
                 raise PlayerError("player-unreachable") from None
         return paused is True
 
     def stop(self) -> bool:
         """Quit the player; False when nothing was playing."""
-        with self._lock:
-            if not self._alive():
+        with self._command_lock:
+            if not self.playing():
                 return False
-            self._stop_locked()
+            self._stop_unlocked()
         self.on_change()
         return True
 
-    def _stop_locked(self) -> None:
-        process, self._process = self._process, None
-        self._host = ""
+    def _stop_unlocked(self) -> None:
+        """Quit the process (command lock held, state lock not)."""
+        with self._state_lock:
+            process, path = self._process, self._socket
+            self._process, self._host = None, ""
         if process is None or process.poll() is not None:
             return
-        if self._socket:
+        if path:
             try:
-                self._command(["quit"])
+                self._command(path, ["quit"])
                 return
             except (OSError, ValueError):
                 pass
@@ -368,5 +433,50 @@ class Player:
         except OSError:
             pass
 
-    def _exited(self) -> None:
+    def _exited(self, path: str | None) -> None:
+        """The process is gone: its socket is too (mpv leaves it after a crash)."""
+        if path:
+            unlink_quietly(path)
         self.on_change()
+
+
+def runtime_command(option: str) -> list:
+    """The IPC command for one allowlisted option on a running mpv."""
+    name, _sep, value = option[2:].partition("=")
+    if name == "profile":
+        return ["apply-profile", value]
+    if not _sep:
+        if name.startswith("no-"):
+            name, value = name[3:], "no"
+        else:
+            value = "yes"
+    return ["set", name, value]
+
+
+def unlink_quietly(path: str) -> None:
+    try:
+        os.unlink(path)
+    except FileNotFoundError:
+        pass
+    except OSError:
+        log.debug("could not remove an mpv socket")
+
+
+def remove_stale_sockets(directory: str) -> None:
+    """Remove ``mpv-*.sock`` in our private directory that nobody listens on
+    (left behind when mpv or the plugin crashed). A socket that still answers
+    belongs to a running mpv and stays."""
+    for path in glob.glob(os.path.join(directory, "mpv-*.sock")):
+        try:
+            if not stat.S_ISSOCK(os.lstat(path).st_mode):
+                continue
+        except OSError:
+            continue
+        with socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as probe:
+            probe.settimeout(0.2)
+            try:
+                probe.connect(path)
+            except (ConnectionRefusedError, FileNotFoundError):
+                unlink_quietly(path)
+            except OSError:
+                pass

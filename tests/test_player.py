@@ -10,6 +10,7 @@ import socket
 import stat
 import tempfile
 import threading
+import time
 
 import pytest
 from test_http import Harness
@@ -18,12 +19,15 @@ from blueferry_shortcuts import __main__ as cli
 from blueferry_shortcuts.player import (
     PLAYS_PER_MINUTE,
     QUALITIES,
+    MpvError,
     Player,
     PlayerError,
     PlayOptions,
     check_options,
     mpv_command,
     private_socket_path,
+    remove_stale_sockets,
+    runtime_command,
 )
 from blueferry_shortcuts.settings import Settings, SettingsStore
 
@@ -64,10 +68,13 @@ class FakeIpc:
         self.commands: list[tuple[str, list]] = []
         self.paused = False
         self.broken = False
+        self.refused: set[str] = set()    # command names mpv answers with an error
 
     def __call__(self, path, command):
         if self.broken:
             raise ConnectionRefusedError("no mpv")
+        if command[0] in self.refused:
+            raise MpvError("mpv: property unavailable")
         self.commands.append((path, command))
         if command == ["cycle", "pause"]:
             self.paused = not self.paused
@@ -77,13 +84,13 @@ class FakeIpc:
 
 
 def _player(tmp_path, *, mpv="/usr/bin/mpv", ytdlp="/usr/bin/yt-dlp", spawn=None, ipc=None,
-            runtime=True, clock=None):
+            runtime=True, clock=None, which=None, socket_wait=0.0):
     tools = {"mpv": mpv, "yt-dlp": ytdlp}
     runtime_dir = _short_dir(tmp_path)
     return Player(
-        spawn=spawn or FakeSpawn(), ipc=ipc or FakeIpc(), which=tools.get,
+        spawn=spawn or FakeSpawn(), ipc=ipc or FakeIpc(), which=which or tools.get,
         mpris=lambda: False, runtime_dir=str(runtime_dir) if runtime else "",
-        clock=clock or (lambda: 0.0),
+        clock=clock or (lambda: 0.0), socket_wait=socket_wait,
     )
 
 
@@ -285,6 +292,116 @@ def test_ipc_client_against_a_fake_mpv(tmp_path) -> None:
     assert received[0]["command"] == ["get_property", "pause"]
 
 
+def test_tools_are_cached_until_refreshed(tmp_path) -> None:
+    lookups = []
+
+    def which(name):
+        lookups.append(name)
+        return {"mpv": "/usr/bin/mpv"}.get(name)
+
+    player = _player(tmp_path, which=which)
+    for _ in range(5):
+        assert player.tools().mpv == "/usr/bin/mpv"
+    first = len(lookups)
+    assert first and player.tools().ytdlp is None and len(lookups) == first
+    player.play("https://a.example/1", "a.example", PlayOptions())
+    assert len(lookups) == 2 * first      # play looks again
+    player.refresh_tools()
+    assert len(lookups) == 3 * first
+
+
+def test_card_state_does_not_wait_for_a_slow_ipc(tmp_path) -> None:
+    release, entered = threading.Event(), threading.Event()
+
+    class SlowIpc(FakeIpc):
+        def __call__(self, path, command):
+            if command[0] == "loadfile":
+                entered.set()
+                release.wait(10)
+            return super().__call__(path, command)
+
+    player = _player(tmp_path, ipc=SlowIpc())
+    player.play("https://a.example/1", "a.example", PlayOptions())
+    worker = threading.Thread(
+        target=player.play, args=("https://b.example/2", "b.example", PlayOptions()))
+    worker.start()
+    try:
+        assert entered.wait(5)
+        started = time.monotonic()
+        assert player.playing() and player.host == "a.example"
+        assert player.tools().mpv == "/usr/bin/mpv"
+        assert time.monotonic() - started < 0.5
+    finally:
+        release.set()
+        worker.join(5)
+    assert player.host == "b.example"
+
+
+def test_commands_wait_briefly_for_a_new_socket(tmp_path) -> None:
+    spawn = FakeSpawn()
+    player = _player(tmp_path, spawn=spawn, socket_wait=1.0)
+    player.play("https://a.example/1", "a.example", PlayOptions())
+    path = next(a for a in spawn.calls[0]
+                if a.startswith("--input-ipc-server=")).split("=", 1)[1]
+    timer = threading.Timer(0.2, lambda: open(path, "w").close())
+    timer.start()
+    started = time.monotonic()
+    assert player.toggle_pause() is True
+    assert 0.15 <= time.monotonic() - started < 1.0
+    timer.join()
+    # The socket is there now: replacing does not restart mpv.
+    assert player.play("https://b.example/2", "b.example", PlayOptions()) is True
+    assert len(spawn.calls) == 1
+
+
+def test_replace_applies_the_extra_options(tmp_path) -> None:
+    ipc = FakeIpc()
+    player = _player(tmp_path, ipc=ipc)
+    player.play("https://a.example/1", "a.example", PlayOptions())
+    ipc.refused = {"apply-profile"}
+    options = PlayOptions(False, "720p", ("--volume=40", "--no-border", "--ontop",
+                                          "--profile=tv"))
+    assert player.play("https://b.example/2", "b.example", options) is True
+    sent = [command for _path, command in ipc.commands]
+    assert ["set_property", "fullscreen", False] in sent
+    assert ["set_property", "ytdl-format", QUALITIES["720p"]] in sent
+    assert ["set", "volume", "40"] in sent and ["set", "border", "no"] in sent
+    assert ["set", "ontop", "yes"] in sent
+    assert sent.index(["set", "volume", "40"]) < sent.index(
+        ["loadfile", "https://b.example/2", "replace"])
+    assert runtime_command("--profile=tv") == ["apply-profile", "tv"]
+    assert runtime_command("--mute=yes") == ["set", "mute", "yes"]
+
+
+def test_exit_removes_the_socket(tmp_path) -> None:
+    spawn = FakeSpawn()
+    player = _player(tmp_path, spawn=spawn)
+    player.play("https://a.example/1", "a.example", PlayOptions())
+    path = next(a for a in spawn.calls[0]
+                if a.startswith("--input-ipc-server=")).split("=", 1)[1]
+    open(path, "w").close()
+    spawn.processes[0].code = -11
+    spawn.on_exit[0]()
+    assert not os.path.exists(path)
+    spawn.on_exit[0]()        # already gone: no error
+
+
+def test_stale_sockets_are_removed_live_ones_stay(tmp_path) -> None:
+    directory = _short_dir(tmp_path)
+    stale, live = str(directory / "mpv-stale.sock"), str(directory / "mpv-live.sock")
+    dead = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+    dead.bind(stale)
+    dead.close()                  # the file stays, nobody listens
+    listening = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+    listening.bind(live)
+    listening.listen(1)
+    try:
+        remove_stale_sockets(str(directory))
+        assert not os.path.exists(stale) and os.path.exists(live)
+    finally:
+        listening.close()
+
+
 # ---- HTTPS endpoints ---------------------------------------------------------------
 
 @pytest.fixture
@@ -372,6 +489,14 @@ def test_card_card_actions_and_missing_tools(play_harness) -> None:
     assert item["icon"] == "dialog-warning"
     assert "mpv" in h.service.status()["detail"]
     assert h.request("POST", "/play", {"url": "https://example.org/v"})[0] == 503
+
+
+def test_plugin_stop_quits_the_player(play_harness) -> None:
+    h = play_harness(play_on_pc=True)
+    h.request("POST", "/play", {"url": "https://example.org/v.mp4"})
+    h.close()
+    assert not h.service._player.playing()
+    assert h.ipc.commands[-1][1] == ["quit"]
 
 
 def test_play_settings_in_the_form(play_harness) -> None:
