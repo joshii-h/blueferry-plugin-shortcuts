@@ -12,7 +12,7 @@ session bus and talks to BlueFerry only through `blueferry.plugin_api`.
 | Request | What happens on the PC |
 | --- | --- |
 | `POST /clipboard` | Text (optionally an image) goes to the desktop clipboard via `wl-copy`, marked as sensitive so clipboard managers keep it out of their history (wl-clipboard 2.3+). Notification "Clipboard from iPhone". |
-| `GET /clipboard` | Returns the PC clipboard as text, so a shortcut can copy it to the iPhone. **Off by default.** |
+| `GET /clipboard` | Returns the text you sent with **Send clipboard to iPhone** (card or `blueferry-shortcuts send-clipboard`; once, within two minutes). Reading the PC clipboard at any time is **off by default** (`allow_clipboard_read`). |
 | `POST /link` | Notification with the host name and an "Open" button that opens the full URL (http/https only). Sign-in data in the link (`https://user:password@host/…`) is removed first and the notification says so. |
 | `POST /battery` | Card item "iPhone battery 87 % ⚡ charging" with the time of the report. |
 | `GET /ca.crt`, `GET /ca.mobileconfig` | The plugin's CA certificate, raw or as an iOS profile (no token needed; it is public). |
@@ -102,6 +102,42 @@ restarted by the test.
   not kept in the keyring on purpose: you need to read it to type it into
   the Shortcuts app, and the card shows it (masked until you reveal it,
   hidden again after two minutes).
+
+## Clipboard to the iPhone, and why the PC cannot ring it
+
+iOS does not let a PC push anything to a shortcut: a shortcut runs only
+when you start it (or an automation with a fixed trigger starts it). So
+the PC **offers** and the iPhone **fetches**:
+
+1. On the PC, **Send clipboard to iPhone** on the card (the line *iPhone
+   last connected …*), or `blueferry-shortcuts send-clipboard`, for
+   example on a key in your compositor:
+
+   ```kdl
+   // niri: ~/.config/niri/config.kdl, inside binds { }
+   Mod+Shift+I { spawn "blueferry-shortcuts" "send-clipboard"; }
+   ```
+
+   The card shows *Clipboard waiting for the iPhone until 14:32*.
+2. On the iPhone, run **BlueFerry** > *PC → Clipboard* (or the manual
+   shortcut *From PC: Clipboard*). It gets that text **once**; the PC shows
+   "Clipboard sent to iPhone". After two minutes, or with *Withdraw*, the
+   offer is gone.
+
+This needs no opt-in: you chose the text on the PC, and it is handed out
+once to a request with the token, over HTTPS only (never over plain HTTP).
+With `allow_clipboard_read` on, an offered text still comes first; after
+that the shortcut reads the live clipboard as before. Text only, up to
+64 KB.
+
+**Ringing the iPhone from the PC is not possible this way.** It would need
+the iPhone to ask the PC every few seconds, and iOS has no such trigger:
+automations start on time of day, charger, Wi-Fi, NFC, opening an app and
+similar events, not on an interval, and a shortcut cannot run in the
+background. A time-of-day automation every 15 minutes would ring a lost
+phone far too late and drain the battery. Use *Find My*
+(icloud.com/find) to ring it; BlueFerry's own Bluetooth connection is the
+other place where such a feature could live.
 
 ## Set up your iPhone (English)
 
@@ -233,7 +269,8 @@ link; turn on *Show in Share Sheet* (Shortcut details) and use
 
 #### Shortcut 2: "From PC: Clipboard"
 
-Needs `allow_clipboard_read` on.
+Fetches what you sent with **Send clipboard to iPhone**; with
+`allow_clipboard_read` on, it reads the PC clipboard at any time.
 
 1. New shortcut **From PC: Clipboard**.
 2. Action **Get Contents of URL**: URL `https://<PC>:47801/clipboard`, Method
@@ -387,7 +424,14 @@ per Teilen-Menü an den PC.
 
 #### Kurzbefehl 2: „Von PC: Zwischenablage“
 
-Braucht `allow_clipboard_read` an.
+Holt, was du auf dem PC mit **Zwischenablage ans iPhone** (Karte, Zeile
+*iPhone zuletzt verbunden …*, oder `blueferry-shortcuts send-clipboard`,
+z. B. auf einer Taste in niri) bereitstellst: einmal, innerhalb von zwei
+Minuten, nur über HTTPS. Mit `allow_clipboard_read` liest er die
+PC-Zwischenablage jederzeit. Das iPhone **klingeln lassen** geht über
+Kurzbefehle nicht: iOS kennt keinen Auslöser, der regelmäßig beim PC
+nachfragt; dafür *Wo ist?* nutzen. Details: [Clipboard to the
+iPhone](#clipboard-to-the-iphone-and-why-the-pc-cannot-ring-it).
 
 1. Neuer Kurzbefehl **Von PC: Zwischenablage**.
 2. Aktion **Inhalte von URL abrufen**: URL `https://<PC>:47801/clipboard`,
