@@ -139,7 +139,9 @@ Turn it on in the settings, section **Play on PC** (`play_on_pc`). Then:
   `--resume-playback` / `--no-resume-playback`, `--sub-auto=…`,
   `--alang=de,en`, `--slang=de,en`, `--speed=0.25…4` and
   `--profile=NAME` (a profile from your own `mpv.conf`). Your normal mpv
-  configuration (for example uosc) applies.
+  configuration (for example uosc) applies. When a link replaces the one
+  playing, the options, fullscreen and quality are applied to the running
+  player too (`--screen` may only take effect in a new window).
 
 ### The "Play on PC" shortcut
 
@@ -149,11 +151,14 @@ Turn it on in the settings, section **Play on PC** (`play_on_pc`). Then:
 2. At the top, "Receive **URLs and Safari web pages** from **Share
    Sheet**"; *If there is no input*: **Get Clipboard** (then the shortcut
    also works from the home screen with a copied link).
-3. Action **Get Contents of URL**: URL `https://<PC>:47801/play`, Method
+3. Action **Get URLs from Input** with *Shortcut Input*. Shared from
+   Safari, the input is a web page, and as text it is not reliably its
+   address; this action turns it into the link.
+4. Action **Get Contents of URL**: URL `https://<PC>:47801/play`, Method
    `POST`, header `Authorization` = `Bearer <token>` (as for the other
    shortcuts), Request Body `JSON` with one field: key `url`, type **Text**,
-   value: the magic variable **Shortcut Input**.
-4. Optional: **Show Notification** "Playing on PC".
+   value: the magic variable **URLs** (the result of step 3).
+5. Optional: **Show Notification** "Playing on PC".
 
 Then in YouTube, Safari or any other app: *Share* > **Play on PC**.
 
@@ -165,7 +170,8 @@ again resumes. Both work well as home-screen icons, in the Control Center
 
 Answers: 200 `{"ok": true, "replaced": false}` (true when a link replaced
 the one playing), 403 `play-disabled` (switch off), 503 `mpv-missing`,
-429 `play-rate-limited`, 409 `not-playing` (pause without a player).
+429 `play-rate-limited`, 409 `not-playing` (pause without a player),
+400 `url-not-public` (a link to the PC itself, see below).
 
 ### Privacy and safety
 
@@ -174,6 +180,13 @@ the one playing), 403 `play-disabled` (switch off), 503 `mpv-missing`,
   characters; at most 6 new links per minute (plus the server's general
   limit of 30 requests per minute). Sign-in data (`user:password@`) is
   removed from the link first.
+- No links to the PC itself: mpv and yt-dlp fetch the link from the PC,
+  so `/play` refuses (`url-not-public`) loopback (`127.0.0.0/8`, `::1`),
+  link-local (`169.254.0.0/16` with cloud metadata, `fe80::/10`) and
+  unspecified addresses (`0.0.0.0`, `::`), also IPv4-mapped, `localhost`
+  and `*.localhost`, and host names that resolve to any of these.
+  Addresses in the home network (`10.x`, `172.16–31.x`, `192.168.x`,
+  `fd00::/8`) are **allowed on purpose**, so Jellyfin or a NAS play.
 - The link is never given to a shell: mpv is started with an argument
   list and `--` before the link, so nothing in the link can become an mpv
   option. A replacing link goes through mpv's JSON IPC as a string. mpv
@@ -318,8 +331,9 @@ clipboard image instead of JSON. The plugin accepts PNG, JPEG, GIF and WebP;
 HEIC photos need a **Convert Image** (JPEG) action first.
 
 Links: a variant with URL `…/link` and JSON field `url` (type Text) sends a
-link; turn on *Show in Share Sheet* (Shortcut details) and use
-*Shortcut Input* as the value to send the current Safari page.
+link; turn on *Show in Share Sheet* (Shortcut details), add **Get URLs from
+Input** with *Shortcut Input* first and use its result (**URLs**) as the
+value to send the current Safari page.
 
 #### Shortcut 2: "From PC: Clipboard"
 
@@ -471,9 +485,10 @@ Zwischenablage statt JSON. Das Plugin nimmt PNG, JPEG, GIF und WebP; HEIC-Fotos
 vorher mit **Bild konvertieren** (JPEG) umwandeln.
 
 Links: eine Variante mit URL `…/link` und JSON-Feld `url` (Typ Text) schickt
-einen Link; in den Kurzbefehl-Details *Im Share-Sheet anzeigen* einschalten
-und *Kurzbefehleingabe* als Wert nehmen, dann geht die aktuelle Safari-Seite
-per Teilen-Menü an den PC.
+einen Link; in den Kurzbefehl-Details *Im Share-Sheet anzeigen* einschalten,
+davor die Aktion **URLs aus Eingabe abrufen** mit *Kurzbefehleingabe*
+einfügen und deren Ergebnis (**URLs**) als Wert nehmen, dann geht die
+aktuelle Safari-Seite per Teilen-Menü an den PC.
 
 #### Kurzbefehl 2: „Von PC: Zwischenablage“
 
@@ -493,10 +508,13 @@ Details und Datenschutz: [Play on PC](#play-on-pc).
 1. Neuer Kurzbefehl **Am PC abspielen**; in den Details (ⓘ) *Im
    Share-Sheet anzeigen* einschalten, Eingabe nur **URLs** und
    **Safari-Webseiten**; *Wenn keine Eingabe*: **Zwischenablage abrufen**.
-2. Aktion **Inhalte von URL abrufen**: URL `https://<PC>:47801/play`,
+2. Aktion **URLs aus Eingabe abrufen** mit *Kurzbefehleingabe* (aus
+   Safari kommt sonst eine Webseite, deren Text nicht sicher die Adresse
+   ist).
+3. Aktion **Inhalte von URL abrufen**: URL `https://<PC>:47801/play`,
    Methode `POST`, Header wie oben, Hauptteil `JSON` mit Schlüssel `url`,
-   Typ **Text**, Wert **Kurzbefehleingabe**.
-3. In YouTube, Safari usw.: *Teilen* > **Am PC abspielen**.
+   Typ **Text**, Wert **URLs** (Ergebnis von Schritt 2).
+4. In YouTube, Safari usw.: *Teilen* > **Am PC abspielen**.
 
 **Pause am PC** und **Stopp am PC**: je nur **Inhalte von URL abrufen**
 mit `…/pause` bzw. `…/stop`, Methode `POST`, gleicher Header, kein
