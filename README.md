@@ -121,8 +121,9 @@ the PC **offers** and the iPhone **fetches**:
    The card shows *Clipboard waiting for the iPhone until 14:32*.
 2. On the iPhone, run **BlueFerry** > *PC → Clipboard* (or the manual
    shortcut *From PC: Clipboard*). It gets that text **once**; the PC shows
-   "Clipboard sent to iPhone". After two minutes, or with *Withdraw*, the
-   offer is gone.
+   "Clipboard sent to iPhone". The text is served once even if the transfer
+   then fails (for example the connection drops): offer it again. After two
+   minutes, or with *Withdraw*, the offer is gone.
 
 This needs no opt-in: you chose the text on the PC, and it is handed out
 once to a request with the token, over HTTPS only (never over plain HTTP).
@@ -426,7 +427,8 @@ per Teilen-Menü an den PC.
 
 Holt, was du auf dem PC mit **Zwischenablage ans iPhone** (Karte, Zeile
 *iPhone zuletzt verbunden …*, oder `blueferry-shortcuts send-clipboard`,
-z. B. auf einer Taste in niri) bereitstellst: einmal, innerhalb von zwei
+z. B. auf einer Taste in niri) bereitstellst: einmal (auch wenn die
+Übertragung dann scheitert; dann neu bereitstellen), innerhalb von zwei
 Minuten, nur über HTTPS. Mit `allow_clipboard_read` liest er die
 PC-Zwischenablage jederzeit. Das iPhone **klingeln lassen** geht über
 Kurzbefehle nicht: iOS kennt keinen Auslöser, der regelmäßig beim PC
