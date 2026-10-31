@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import argparse
+import json
 import logging
 import os
 import shlex
@@ -171,6 +172,33 @@ def networks(action: str, name: str | None, store: SettingsStore | None = None,
     return 0
 
 
+def send_clipboard(call=None) -> int:
+    """Ask the running plugin to offer the PC clipboard to the iPhone (for a
+    keyboard shortcut of the desktop); the same as the card action."""
+    from blueferry.plugin_api import BUS_NAME_PREFIX, OBJECT_PATH, PLUGIN_INTERFACE
+
+    if call is None:
+        import dbus
+
+        def call(method: str, *args: str) -> str:
+            bus = dbus.SessionBus()
+            name = BUS_NAME_PREFIX + PLUGIN_ID.replace("-", "_")
+            proxy = bus.get_object(name, OBJECT_PATH)
+            return str(proxy.get_dbus_method(method, PLUGIN_INTERFACE)(*args, timeout=10))
+
+    try:
+        reply = json.loads(call("InvokeAction", "state", "offer_clipboard", "{}"))
+    except Exception as error:  # dbus raises its own exception types
+        print(f"The plugin is not reachable: {error}", file=sys.stderr)
+        return 1
+    if not isinstance(reply, dict) or reply.get("ok") is not True:
+        message = reply.get("message") if isinstance(reply, dict) else None
+        print(message or "The plugin refused.", file=sys.stderr)
+        return 1
+    print('Clipboard offered for two minutes; run "PC → Clipboard" on the iPhone.')
+    return 0
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(prog=ENTRY_POINT, description=__doc__)
     commands = parser.add_subparsers(dest="command", required=True)
@@ -185,6 +213,8 @@ def main(argv: list[str] | None = None) -> int:
                       default="list")
     nets.add_argument("name", nargs="?", help="name or UUID to remove")
     commands.add_parser("forget", help="remove token, settings and certificates")
+    commands.add_parser("send-clipboard",
+                        help="offer the PC clipboard to the iPhone for two minutes")
     args = parser.parse_args(argv)
     logging.basicConfig(level=logging.INFO, format="%(levelname)s %(name)s: %(message)s")
 
@@ -196,6 +226,8 @@ def main(argv: list[str] | None = None) -> int:
         return show()
     if args.command == "show":
         return show()
+    if args.command == "send-clipboard":
+        return send_clipboard()
     if args.command == "networks":
         if args.action == "remove" and not args.name:
             parser.error("networks remove needs a name or UUID")

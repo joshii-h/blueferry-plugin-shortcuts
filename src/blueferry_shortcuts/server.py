@@ -13,7 +13,9 @@ Endpoints (all but ``/``, ``/ca.crt``, ``/ca.mobileconfig`` and the setup
 pages need ``Authorization: Bearer <token>``):
 
 - ``POST /clipboard``: ``{"text": "…"}``, ``text/plain`` or (opt-in) an image
-- ``GET /clipboard``: the PC clipboard as ``text/plain`` (opt-in)
+- ``GET /clipboard``: the text sent with "Send clipboard to iPhone" on the
+  card (once, within two minutes), else the PC clipboard as ``text/plain``
+  (opt-in)
 - ``POST /link``: ``{"url": "https://…"}`` or ``text/plain``
 - ``POST /battery``: ``{"level": 87, "charging": true}`` (``charging`` optional:
   without it the last known state stays)
@@ -102,6 +104,7 @@ class Endpoints(Protocol):
     def on_clipboard_text(self, text: str) -> None: ...
     def on_clipboard_image(self, data: bytes, mime: str) -> None: ...
     def read_clipboard(self, limit: int) -> str | None: ...
+    def take_offered_clipboard(self) -> str | None: ...
     def on_link(self, url: str) -> None: ...
     def on_battery(self, level: int, charging: bool | None) -> None: ...
     def on_authorized(self, secure: bool) -> None: ...
@@ -439,6 +442,11 @@ class _Handler(DeadlineRequestHandler):
 
     def _get_clipboard(self) -> None:
         endpoints = self.server.endpoints
+        # Sent on purpose from the PC: no opt-in needed, picked up once.
+        offered = endpoints.take_offered_clipboard()
+        if offered is not None:
+            self._send(200, offered.encode("utf-8"), "text/plain; charset=utf-8")
+            return
         if not endpoints.allow_clipboard_read():
             raise RequestError(403, "clipboard-read-disabled")
         text = endpoints.read_clipboard(MAX_TEXT_BYTES)

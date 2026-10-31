@@ -470,3 +470,55 @@ def test_test_connection_asks_the_running_endpoint(harness) -> None:
     result = h.host.test_config({"port": h.port})
     assert result == {"ok": True, "message": f"Reachable at https://127.0.0.1:{h.port}."}
     h.host.assert_never_sent(h.token)
+
+
+def test_send_clipboard_to_iphone_once_without_opt_in(harness, caplog) -> None:
+    caplog.set_level(logging.DEBUG)
+    h = harness()
+    h.clipboard.current = SECRET_TEXT
+    assert h.request("GET", "/clipboard")[0] == 403          # nothing offered, no opt-in
+    state = next(item for item in h.host.items() if item["id"] == "state")
+    assert [a["id"] for a in state["actions"]] == ["offer_clipboard"]
+    assert h.host.invoke("state", "offer_clipboard")["ok"] is True
+    state = next(item for item in h.host.items() if item["id"] == "state")
+    assert "wartet" in state["subtitle"] and SECRET_TEXT not in state["subtitle"]
+    assert [a["id"] for a in state["actions"]] == ["withdraw_offer"]
+    status, content_type, body = h.request("GET", "/clipboard")
+    assert status == 200 and content_type.startswith("text/plain")
+    assert body.decode() == SECRET_TEXT
+    title, text, *_rest = h.host.notifications[-1]
+    assert title == "Zwischenablage ans iPhone gesendet" and SECRET_TEXT not in text
+    assert h.request("GET", "/clipboard")[0] == 403          # picked up once
+    assert SECRET_TEXT not in caplog.text
+
+
+def test_offered_clipboard_needs_the_token_and_expires(harness) -> None:
+    h = harness()
+    h.host.invoke("state", "offer_clipboard")
+    assert h.request("GET", "/clipboard", token=False)[0] == 401
+    assert h.service._offer is not None                      # still waiting
+    h.service._offer = ("alt", 0.0)                          # expired
+    assert h.request("GET", "/clipboard")[0] == 403
+    h.host.invoke("state", "offer_clipboard")
+    assert h.host.invoke("state", "withdraw_offer")["ok"] is True
+    assert h.request("GET", "/clipboard")[0] == 403
+
+
+def test_offer_refuses_empty_and_large_clipboards(harness) -> None:
+    h = harness()
+    h.clipboard.current = ""
+    h.host.invoke("state", "offer_clipboard")
+    assert h.service._offer is None
+    assert h.host.notifications[-1][1] == "Die Zwischenablage enthält keinen Text"
+    h.clipboard.current = "x" * (MAX_TEXT_BYTES + 1)
+    h.host.invoke("state", "offer_clipboard")
+    assert h.service._offer is None and "64 KB" in h.host.notifications[-1][1]
+
+
+def test_offer_with_opt_in_comes_first(harness) -> None:
+    h = harness(allow_clipboard_read=True)
+    h.clipboard.current = "offered"
+    h.host.invoke("state", "offer_clipboard")
+    h.clipboard.current = "copied later"
+    assert h.request("GET", "/clipboard")[2].decode() == "offered"
+    assert h.request("GET", "/clipboard")[2].decode() == "copied later"

@@ -267,3 +267,21 @@ def test_cli_networks(tmp_path, capsys) -> None:
     assert cli.networks("list", None, store) == 0
     out = capsys.readouterr().out
     assert HOME.uuid in out and "Plain HTTP is on" in out
+
+
+def test_cli_send_clipboard_invokes_the_card_action(capsys) -> None:
+    calls = []
+
+    def call(method, *args):
+        calls.append((method, *args))
+        return json.dumps({"ok": True, "message": None, "open_uri": None})
+
+    assert cli.send_clipboard(call) == 0
+    assert calls == [("InvokeAction", "state", "offer_clipboard", "{}")]
+    assert "PC → Clipboard" in capsys.readouterr().out
+
+    def broken(method, *args):
+        raise RuntimeError("no bus")
+
+    assert cli.send_clipboard(broken) == 1
+    assert cli.send_clipboard(lambda *a: json.dumps({"ok": False, "message": "nein"})) == 1

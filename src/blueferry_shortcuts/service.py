@@ -30,7 +30,7 @@ from blueferry.plugin_api.config_flow import ConfigTestResult
 from blueferry.plugin_api.manifest import PluginManifest
 from blueferry.plugin_api.service import NotifyService, PluginCallError
 from blueferry_plugin_kit import netaddr
-from blueferry_plugin_kit.clipboard import Clipboard
+from blueferry_plugin_kit.clipboard import Clipboard, ClipboardError
 from blueferry_plugin_kit.configtest import failed, passed
 from blueferry_plugin_kit.lanserver.tls import CertificateStore, Material
 
@@ -50,7 +50,7 @@ from blueferry_shortcuts.pairing import (
     mobileconfig,
     qr_svg,
 )
-from blueferry_shortcuts.server import HttpsBridge
+from blueferry_shortcuts.server import MAX_TEXT_BYTES, HttpsBridge
 from blueferry_shortcuts.settings import (
     DEFAULT_HTTP_PORT,
     DEFAULT_SHORTCUT_URL,
@@ -78,6 +78,8 @@ log = logging.getLogger(__name__)
 
 MAX_LINKS = 20
 REVEAL_SECONDS = 120
+# "Send clipboard to iPhone": how long the text waits for one pickup.
+OFFER_SECONDS = 120
 MAINTAIN_SECONDS = 60
 MAX_ARGS = 4096
 PROBE_TIMEOUT_S = 5
@@ -187,6 +189,8 @@ class ShortcutsService(NotifyService):
         self._show_setup = False
         self._revealed_at: float | None = None
         self._reveal_timer: threading.Timer | None = None
+        self._offer: tuple[str, float] | None = None    # text, monotonic deadline
+        self._offer_timer: threading.Timer | None = None
         self._links: OrderedDict[str, str] = OrderedDict()
         self._link_counter = 0
         self._battery: dict[str, object] | None = None
@@ -275,6 +279,9 @@ class ShortcutsService(NotifyService):
             if self._reveal_timer is not None:
                 self._reveal_timer.cancel()
                 self._reveal_timer = None
+            if self._offer_timer is not None:
+                self._offer_timer.cancel()
+                self._offer_timer = None
 
     def _cert_addresses(self, host: str) -> list[str]:
         return self._local_addresses() if netaddr.is_wildcard(host) else [host]
@@ -334,6 +341,67 @@ class ShortcutsService(NotifyService):
 
     def read_clipboard(self, limit: int) -> str | None:
         return self._clipboard.read_text(limit)
+
+    def take_offered_clipboard(self) -> str | None:
+        """The text from "Send clipboard to iPhone", once, before it expires."""
+        with self._lock:
+            offer, self._offer = self._offer, None
+        if offer is None:
+            return None
+        text, deadline = offer
+        self._card_changed()
+        if time.monotonic() >= deadline:
+            return None
+        log.info("offered clipboard picked up")
+        self.emit_notify(self._t["offer_taken_title"],
+                         self._t["offer_taken_body"].format(count=len(text)), "phone")
+        return text
+
+    def offer_clipboard(self) -> None:
+        """Worker thread: keep the PC clipboard text for one pickup by the iPhone.
+
+        iOS cannot be pushed to; the iPhone fetches it with the existing
+        ``GET /clipboard`` ("PC → Clipboard"), which needs no opt-in for a
+        text offered on purpose like this. Failures arrive as a popup.
+        """
+        t = self._t
+        try:
+            text = self._clipboard.read_text(MAX_TEXT_BYTES)
+        except ClipboardError:
+            text, problem = None, t["offer_failed"]
+        else:
+            problem = (t["offer_too_large"] if text is None
+                       else t["offer_empty"] if not text else "")
+        if problem or text is None:
+            self.emit_notify(t["offer"], problem, "dialog-warning")
+            return
+        with self._lock:
+            self._offer = (text, time.monotonic() + OFFER_SECONDS)
+            if self._offer_timer is not None:
+                self._offer_timer.cancel()
+            # Refresh the card when the offer runs out.
+            self._offer_timer = threading.Timer(OFFER_SECONDS + 1, self._card_changed)
+            self._offer_timer.daemon = True
+            self._offer_timer.start()
+        log.info("clipboard offered to the iPhone")
+        self._card_changed()
+
+    def withdraw_offer(self) -> None:
+        with self._lock:
+            self._offer = None
+            if self._offer_timer is not None:
+                self._offer_timer.cancel()
+                self._offer_timer = None
+        self._card_changed()
+
+    def _offer_until(self) -> float | None:
+        """Wall-clock end of a pending offer, or None."""
+        with self._lock:
+            offer = self._offer
+        if offer is None:
+            return None
+        left = offer[1] - time.monotonic()
+        return self._now() + left if left > 0 else None
 
     def on_link(self, url: str) -> None:
         # Links with user info (https://user:pw@host/) carry credentials;
@@ -640,10 +708,15 @@ class ShortcutsService(NotifyService):
         if "at" not in seen:
             return CardItem("state", "dialog-information", t["state_new"], t["state_new_hint"])
         secure = seen.get("secure_at") == seen["at"]
+        subtitle = t["seen_secure" if secure else "seen_plain"]
+        action = Action("offer_clipboard", t["offer"], "edit-copy")
+        until = self._offer_until()
+        if until is not None:
+            subtitle = t["offer_waiting"].format(time=self._when(int(until)))
+            action = Action("withdraw_offer", t["offer_withdraw"], "edit-undo")
         return CardItem(
             "state", "network-wireless-encrypted" if secure else "network-wireless",
-            t["state_seen"].format(ago=self._ago(seen["at"])),
-            t["seen_secure" if secure else "seen_plain"],
+            t["state_seen"].format(ago=self._ago(seen["at"])), subtitle, (action,),
         )
 
     def _plain_item(self) -> CardItem | None:
@@ -711,6 +784,13 @@ class ShortcutsService(NotifyService):
             return result(True, None, url) if url else result(False, t["link_gone"])
         if item_id == "bridge" and action_id == "setup_iphone":
             return self.begin_setup()
+        if item_id == "state" and action_id == "offer_clipboard":
+            # wl-paste may take a moment: not on the main loop.
+            self._run_async(self.offer_clipboard)
+            return result(True)
+        if item_id == "state" and action_id == "withdraw_offer":
+            self.withdraw_offer()
+            return result(True)
         if item_id == "plain" and action_id == "allow_network":
             with self._lock:
                 decision = self._decision

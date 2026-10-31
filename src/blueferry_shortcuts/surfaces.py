@@ -130,6 +130,15 @@ _TEXTS = {
         "vpn_lan": "{vpn} is a VPN; listening on the LAN interface instead",
         "vpn_only": "Only {vpn} (a VPN) has a default route; the iPhone may not "
                     "reach this address. Set an interface in the settings.",
+        "offer": "Send clipboard to iPhone",
+        "offer_withdraw": "Withdraw",
+        "offer_waiting": "Clipboard waiting for the iPhone until {time}: "
+                         "run “PC → Clipboard” there",
+        "offer_empty": "The clipboard holds no text",
+        "offer_too_large": "The clipboard text is larger than 64 KB",
+        "offer_failed": "Could not read the clipboard",
+        "offer_taken_title": "Clipboard sent to iPhone",
+        "offer_taken_body": "{count} characters",
         "date": "%b %d, %H:%M",
     },
     "de": {
@@ -192,6 +201,15 @@ _TEXTS = {
         "vpn_lan": "{vpn} ist ein VPN; Empfang stattdessen auf der LAN-Schnittstelle",
         "vpn_only": "Nur {vpn} (ein VPN) hat eine Standardroute; das iPhone erreicht "
                     "diese Adresse vielleicht nicht. Schnittstelle in den Einstellungen setzen.",
+        "offer": "Zwischenablage ans iPhone",
+        "offer_withdraw": "Zurückziehen",
+        "offer_waiting": "Zwischenablage wartet bis {time} aufs iPhone: "
+                         "dort „PC → Zwischenablage“ ausführen",
+        "offer_empty": "Die Zwischenablage enthält keinen Text",
+        "offer_too_large": "Der Text in der Zwischenablage ist größer als 64 KB",
+        "offer_failed": "Zwischenablage nicht lesbar",
+        "offer_taken_title": "Zwischenablage ans iPhone gesendet",
+        "offer_taken_body": "{count} Zeichen",
         "date": "%d.%m. %H:%M",
     },
 }

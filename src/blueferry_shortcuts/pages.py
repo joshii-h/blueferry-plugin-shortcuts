@@ -281,8 +281,10 @@ _SETUP = {
         "copied": "Copied ✓",
         "local_net": "The first time the shortcut runs, iOS asks whether Shortcuts may "
                      "find devices on your local network: tap <b>Allow</b>.",
-        "read_off": "“PC → Clipboard” works once you allow reading the PC clipboard in "
-                    "BlueFerry's plugin settings, and only over the encrypted connection.",
+        "read_off": "“PC → Clipboard” fetches what you send with “Send clipboard to "
+                    "iPhone” on the BlueFerry card (once, within two minutes); to read the "
+                    "PC clipboard at any time, allow it in BlueFerry's plugin settings. "
+                    "Both only over the encrypted connection.",
         "test_h": "Test",
         "test_button": "Test now",
         "test_hint": "Your PC shows “iPhone connected ✅”. Then try the shortcut "
@@ -360,9 +362,10 @@ _SETUP = {
         "copied": "Kopiert ✓",
         "local_net": "Beim ersten Ausführen fragt iOS, ob Kurzbefehle Geräte im lokalen "
                      "Netzwerk finden darf: <b>Erlauben</b> tippen.",
-        "read_off": "„PC → Zwischenablage“ geht, sobald du in BlueFerry in den "
-                    "Plugin-Einstellungen das Lesen der PC-Zwischenablage erlaubst, und "
-                    "nur über die verschlüsselte Verbindung.",
+        "read_off": "„PC → Zwischenablage“ holt, was du auf der BlueFerry-Karte mit "
+                    "„Zwischenablage ans iPhone“ bereitstellst (einmal, innerhalb von zwei "
+                    "Minuten); jederzeit lesen geht, wenn du es in den Plugin-Einstellungen "
+                    "erlaubst. Beides nur über die verschlüsselte Verbindung.",
         "test_h": "Testen",
         "test_button": "Jetzt testen",
         "test_hint": "Dein PC zeigt „iPhone verbunden ✅“. Danach im Kurzbefehl "
