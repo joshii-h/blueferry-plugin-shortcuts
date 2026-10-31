@@ -36,6 +36,7 @@ def test_manifest_declares_the_surfaces_and_the_guided_settings() -> None:
     fields = {field.key: field for field in manifest.config}
     assert list(fields) == ["bind_address", "allow_all_interfaces", "port", "token",
                             "allow_clipboard_read", "accept_images", "shortcut_url",
+                            "play_on_pc", "play_fullscreen", "play_quality", "play_options",
                             "allow_http", "http_port", "http_networks"]
     assert fields["port"].default == 47801
     assert fields["token"].secret
@@ -46,7 +47,11 @@ def test_manifest_declares_the_surfaces_and_the_guided_settings() -> None:
                       "port": "options", "token": "advanced",
                       "allow_clipboard_read": "options", "accept_images": "options",
                       "shortcut_url": "options", "allow_http": "advanced",
-                      "http_port": "advanced", "http_networks": "advanced"}
+                      "http_port": "advanced", "http_networks": "advanced",
+                      "play_on_pc": "play", "play_fullscreen": "play",
+                      "play_quality": "play", "play_options": "play"}
+    assert fields["play_on_pc"].default in (False, "false")
+    assert fields["play_quality"].choices == ("best", "1080p", "720p", "480p", "audio")
     assert fields["allow_http"].default in (False, "false")
     assert fields["http_port"].default == 47800
     assert fields["token"].help_url.startswith("https://github.com/")
@@ -189,7 +194,8 @@ def test_settings_form(tmp_path) -> None:
     assert values == {"bind_address": "", "allow_all_interfaces": False, "port": 47801,
                       "token": "********", "allow_clipboard_read": False,
                       "accept_images": False, "allow_http": False, "http_port": 47800,
-                      "http_networks": "", "shortcut_url": ""}
+                      "http_networks": "", "shortcut_url": "", "play_on_pc": False,
+                      "play_fullscreen": True, "play_quality": "best", "play_options": ""}
     reply = _call(service.SetConfig, json.dumps({"bind_address": "0.0.0.0"}))
     assert reply["ok"] is False and "bind_address" in reply["errors"]
     reply = _call(service.SetConfig, json.dumps({"token": "short"}))

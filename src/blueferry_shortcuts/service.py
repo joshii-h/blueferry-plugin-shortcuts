@@ -32,6 +32,7 @@ from blueferry.plugin_api.service import NotifyService, PluginCallError
 from blueferry_plugin_kit import netaddr
 from blueferry_plugin_kit.clipboard import Clipboard
 from blueferry_plugin_kit.configtest import failed, passed
+from blueferry_plugin_kit.lanserver import RequestError
 from blueferry_plugin_kit.lanserver.tls import CertificateStore, Material
 
 from blueferry_shortcuts import pages
@@ -50,6 +51,14 @@ from blueferry_shortcuts.pairing import (
     mobileconfig,
     qr_svg,
 )
+from blueferry_shortcuts.player import (
+    DEFAULT_QUALITY,
+    QUALITIES,
+    Player,
+    PlayerError,
+    PlayOptions,
+    check_options,
+)
 from blueferry_shortcuts.server import HttpsBridge
 from blueferry_shortcuts.settings import (
     DEFAULT_HTTP_PORT,
@@ -64,6 +73,7 @@ from blueferry_shortcuts.settings import (
     valid_token,
 )
 from blueferry_shortcuts.surfaces import (
+    MAX_ITEMS,
     NOTIFY_ITEM,
     SURFACES_INTERFACE,
     Action,
@@ -83,6 +93,9 @@ MAX_ARGS = 4096
 PROBE_TIMEOUT_S = 5
 # Keep "last connected" on disk at most this often.
 SEEN_SAVE_SECONDS = 60
+# HTTP status per player error word.
+_PLAYER_STATUS = {"mpv-missing": 503, "mpv-failed": 503, "player-unreachable": 503,
+                  "play-rate-limited": 429, "not-playing": 409}
 # TLS alerts that mean "this client does not trust the certificate".
 _CERT_REASONS = ("unknown_ca", "certificate_unknown", "bad_certificate")
 
@@ -154,6 +167,7 @@ class ShortcutsService(NotifyService):
         wall_clock: Callable[[], float] = time.time,
         networks: Networks | None = None,
         run_async: Callable[[Callable[[], None]], None] = _thread,
+        player: Player | None = None,
         **kwargs: Any,
     ) -> None:
         super().__init__(manifest, bus, **kwargs)
@@ -169,6 +183,8 @@ class ShortcutsService(NotifyService):
         self._now = wall_clock
         self._networks = networks or NetworkManagerNetworks()
         self._run_async = run_async
+        self._player = player or Player()
+        self._player.on_change = self._card_changed
         self._probe_certificates = probe_store(self._store.directory)
         self._sessions = SetupSessions()
         self._page = LocalPage(self._render_pc_page)
@@ -366,6 +382,64 @@ class ShortcutsService(NotifyService):
             self._battery = battery
         self._save_state()
         self._card_changed()
+
+    # ---- Play on PC ------------------------------------------------------------
+
+    def _play_settings(self) -> Settings:
+        with self._lock:
+            settings = self._settings
+        if not settings.play_on_pc:
+            raise RequestError(403, "play-disabled")
+        return settings
+
+    def on_play(self, url: str) -> bool:
+        settings = self._play_settings()
+        # Sign-in data would end up in mpv's command line: drop it, as for links.
+        url, _removed = strip_userinfo(url)
+        options = PlayOptions(settings.play_fullscreen, settings.play_quality,
+                              check_options(settings.play_options))
+        host = _host_of(url)
+        try:
+            replaced = self._player.play(url, host, options)
+        except PlayerError as error:
+            raise RequestError(_PLAYER_STATUS.get(error.token, 503), error.token) from None
+        # Only the host: path and query stay off the screen and the history.
+        self.emit_notify(self._t["play_title"], host, "media-playback-start")
+        return replaced
+
+    def on_pause(self) -> bool:
+        self._play_settings()
+        try:
+            return self._player.toggle_pause()
+        except PlayerError as error:
+            raise RequestError(_PLAYER_STATUS.get(error.token, 503), error.token) from None
+
+    def on_stop(self) -> bool:
+        self._play_settings()
+        return self._player.stop()
+
+    def player_report(self) -> dict[str, object]:
+        """For status and the CLI: which tools Play on PC finds."""
+        tools = self._player.tools()
+        return {"mpv": tools.mpv, "yt-dlp": tools.ytdlp, "mpris": tools.mpris}
+
+    def _play_item(self) -> CardItem | None:
+        t = self._t
+        with self._lock:
+            enabled = self._settings.play_on_pc
+        if not enabled:
+            return None
+        tools = self._player.tools()
+        if tools.mpv is None:
+            return CardItem("play", "dialog-warning", t["play_no_mpv"], t["play_no_mpv_hint"])
+        host = self._player.host
+        if host:
+            return CardItem("play", "media-playback-start", t["play_playing"], host, (
+                Action("pause", t["play_pause"], "media-playback-pause"),
+                Action("stop", t["play_stop"], "media-playback-stop"),
+            ))
+        hint = t["play_ready_hint"] if tools.ytdlp else t["play_no_ytdlp"]
+        return CardItem("play", "media-playback-start", t["play_ready"], hint)
 
     def on_authorized(self, secure: bool) -> None:
         now = self._now()
@@ -608,6 +682,9 @@ class ShortcutsService(NotifyService):
         ))
         if url:
             items.append(self._state_item())
+        play = self._play_item()
+        if play is not None:
+            items.append(play)
         plain = self._plain_item()
         if plain is not None:
             items.append(plain)
@@ -615,6 +692,9 @@ class ShortcutsService(NotifyService):
         if hint is not None:
             items.append(hint)
         if show:
+            # The setup data must fit (at most 8 items): Play on PC gives way.
+            if play is not None and len(items) + 3 > MAX_ITEMS:
+                items.remove(play)
             if url:
                 items.append(CardItem("setup_url", "network-server", t["url"], url))
             items.append(CardItem(
@@ -711,6 +791,20 @@ class ShortcutsService(NotifyService):
             return result(True, None, url) if url else result(False, t["link_gone"])
         if item_id == "bridge" and action_id == "setup_iphone":
             return self.begin_setup()
+        if item_id == "play" and action_id in ("pause", "stop"):
+            def control() -> None:
+                try:
+                    if action_id == "pause":
+                        self._player.toggle_pause()
+                    else:
+                        self._player.stop()
+                except PlayerError:
+                    log.info("player control failed")
+                self._card_changed()
+
+            # mpv's IPC may take a moment: not on the main loop.
+            self._run_async(control)
+            return result(True)
         if item_id == "plain" and action_id == "allow_network":
             with self._lock:
                 decision = self._decision
@@ -785,9 +879,18 @@ class ShortcutsService(NotifyService):
         url = self.url()
         with self._lock:
             error = self._error
-        if url:
-            return {"state": "ok", "detail": f"listening on {url}"}
-        return {"state": "error", "detail": error or "not started"}
+        if not url:
+            return {"state": "error", "detail": error or "not started"}
+        detail = f"listening on {url}"
+        with self._lock:
+            play = self._settings.play_on_pc
+        if play:
+            tools = self._player.tools()
+            if tools.mpv is None:
+                detail += "; Play on PC: mpv is not installed"
+            elif tools.ytdlp is None:
+                detail += "; Play on PC: yt-dlp missing, only direct video links play"
+        return {"state": "ok", "detail": detail}
 
     def config_values(self) -> dict[str, object]:
         with self._lock:
@@ -808,6 +911,10 @@ class ShortcutsService(NotifyService):
             "http_port": settings.http_port,
             "http_networks": ", ".join(name for _uuid, name in settings.http_networks),
             "shortcut_url": settings.shortcut_url,
+            "play_on_pc": settings.play_on_pc,
+            "play_fullscreen": settings.play_fullscreen,
+            "play_quality": settings.play_quality,
+            "play_options": settings.play_options,
         }
 
     def apply_config(self, values: dict[str, object]) -> None:
@@ -831,6 +938,13 @@ class ShortcutsService(NotifyService):
         if not valid_shortcut_url(shortcut_url):
             raise ConfigError("shortcut_url", "must be an iCloud shortcut link "
                               "(https://www.icloud.com/shortcuts/…)")
+        try:
+            play_options = " ".join(check_options(str(values.get("play_options") or "")))
+        except ValueError as error:
+            raise ConfigError("play_options", str(error)) from None
+        quality = str(values.get("play_quality") or DEFAULT_QUALITY)
+        if quality not in QUALITIES:
+            raise ConfigError("play_quality", "is not one of the offered choices")
         with self._lock:
             old, host = self._settings, self._host
         networks = old.http_networks
@@ -850,6 +964,10 @@ class ShortcutsService(NotifyService):
             http_port=http_port,
             http_networks=networks,
             shortcut_url=shortcut_url,
+            play_on_pc=values.get("play_on_pc") is True,
+            play_fullscreen=values.get("play_fullscreen") is not False,
+            play_quality=quality,
+            play_options=play_options,
         )
         if (new.bind_address, new.allow_all_interfaces, new.port) != (
             old.bind_address, old.allow_all_interfaces, old.port,

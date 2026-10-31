@@ -17,6 +17,9 @@ pages need ``Authorization: Bearer <token>``):
 - ``POST /link``: ``{"url": "https://…"}`` or ``text/plain``
 - ``POST /battery``: ``{"level": 87, "charging": true}`` (``charging`` optional:
   without it the last known state stays)
+- ``POST /play``: ``{"url": "https://…"}`` or ``text/plain``: plays in mpv
+  (opt-in, see :mod:`.player`); ``POST /pause`` toggles pause, ``POST /stop``
+  quits the player
 - ``GET /ca.crt``: the public CA certificate, to install on the iPhone
 - ``GET /ca.mobileconfig``: the same as a configuration profile
 - ``GET /``: a plain page pointing to "Set up iPhone" in BlueFerry
@@ -104,6 +107,9 @@ class Endpoints(Protocol):
     def read_clipboard(self, limit: int) -> str | None: ...
     def on_link(self, url: str) -> None: ...
     def on_battery(self, level: int, charging: bool | None) -> None: ...
+    def on_play(self, url: str) -> bool: ...
+    def on_pause(self) -> bool: ...
+    def on_stop(self) -> bool: ...
     def on_authorized(self, secure: bool) -> None: ...
     def on_handshake_failed(self, reason: str) -> None: ...
     def on_probe(self) -> None: ...
@@ -323,6 +329,9 @@ class _Handler(DeadlineRequestHandler):
             "/clipboard": {"GET": self._get_clipboard, "POST": self._post_clipboard},
             "/link": {"POST": self._post_link},
             "/battery": {"POST": self._post_battery},
+            "/play": {"POST": self._post_play},
+            "/pause": {"POST": self._post_pause},
+            "/stop": {"POST": self._post_stop},
         }
         if path not in routes:
             self._json(404, {"error": "not-found"})
@@ -446,7 +455,8 @@ class _Handler(DeadlineRequestHandler):
             raise RequestError(413, "too-large")
         self._send(200, text.encode("utf-8"), "text/plain; charset=utf-8")
 
-    def _post_link(self) -> None:
+    def _url_body(self) -> str:
+        """``{"url": …}`` or the URL as plain text, checked by :func:`check_url`."""
         if self._content_type() == "application/json":
             value = self._json_body(MAX_SMALL_BODY)
             url = value.get("url") if isinstance(value, dict) else None
@@ -455,8 +465,31 @@ class _Handler(DeadlineRequestHandler):
                 url = self._body(MAX_SMALL_BODY).decode("utf-8")
             except UnicodeDecodeError:
                 raise RequestError(400, "not-utf8") from None
-        self.server.endpoints.on_link(check_url(url))
+        return check_url(url)
+
+    def _post_link(self) -> None:
+        self.server.endpoints.on_link(self._url_body())
         self._json(200, {"ok": True})
+
+    def _post_play(self) -> None:
+        replaced = self.server.endpoints.on_play(self._url_body())
+        self._json(200, {"ok": True, "replaced": replaced})
+
+    def _post_pause(self) -> None:
+        self._discard_body()
+        paused = self.server.endpoints.on_pause()
+        self._json(200, {"ok": True, "paused": paused})
+
+    def _post_stop(self) -> None:
+        self._discard_body()
+        self.server.endpoints.on_stop()
+        self._json(200, {"ok": True})
+
+    def _discard_body(self) -> None:
+        """Pause and stop take no body; a small one (Shortcuts may send
+        ``{}``) is read and ignored."""
+        if self.headers.get("Content-Length") not in (None, "", "0"):
+            self._body(MAX_SMALL_BODY)
 
     def _post_battery(self) -> None:
         value = self._json_body(MAX_SMALL_BODY)

@@ -26,6 +26,7 @@ from blueferry_plugin_kit.secrets import (
 )
 
 from blueferry_shortcuts import PLUGIN_ID
+from blueferry_shortcuts.player import DEFAULT_QUALITY, QUALITIES, check_options
 
 DEFAULT_PORT = 47801
 # Plain HTTP (opt-in, approved networks only) listens one port below.
@@ -85,6 +86,11 @@ class Settings:
     http_networks: tuple[tuple[str, str], ...] = ()
     # iCloud link of the shared "BlueFerry" shortcut (empty: built-in default).
     shortcut_url: str = ""
+    # Play on PC (opt-in): links from the iPhone play in mpv.
+    play_on_pc: bool = False
+    play_fullscreen: bool = True
+    play_quality: str = DEFAULT_QUALITY
+    play_options: str = ""          # allowlisted extra mpv options
 
     def changed(self, **values: object) -> Settings:
         return replace(self, **values)
@@ -160,6 +166,12 @@ class SettingsStore:
                 or not 1024 <= http_port <= 65535):
             http_port = defaults.http_port
         shortcut_url = raw.get("shortcut_url", "")
+        quality = raw.get("play_quality", DEFAULT_QUALITY)
+        options = raw.get("play_options", "")
+        try:
+            options = " ".join(check_options(options)) if isinstance(options, str) else ""
+        except ValueError:
+            options = ""
         return Settings(
             bind_address=bind if isinstance(bind, str) else "",
             allow_all_interfaces=raw.get("allow_all_interfaces") is True,
@@ -170,6 +182,10 @@ class SettingsStore:
             http_port=http_port,
             http_networks=_networks(raw.get("http_networks")),
             shortcut_url=shortcut_url if valid_shortcut_url(shortcut_url) else "",
+            play_on_pc=raw.get("play_on_pc") is True,
+            play_fullscreen=raw.get("play_fullscreen", True) is not False,
+            play_quality=quality if quality in QUALITIES else DEFAULT_QUALITY,
+            play_options=options,
         )
 
     def save(self, settings: Settings) -> None:

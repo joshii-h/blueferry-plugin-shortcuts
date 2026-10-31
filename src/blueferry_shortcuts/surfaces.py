@@ -130,6 +130,16 @@ _TEXTS = {
         "vpn_lan": "{vpn} is a VPN; listening on the LAN interface instead",
         "vpn_only": "Only {vpn} (a VPN) has a default route; the iPhone may not "
                     "reach this address. Set an interface in the settings.",
+        "play_title": "Playing on PC",
+        "play_playing": "Playing on PC",
+        "play_pause": "Pause / resume",
+        "play_stop": "Stop",
+        "play_ready": "Play on PC ready",
+        "play_ready_hint": "Share a video link to the “Play on PC” shortcut",
+        "play_no_ytdlp": "yt-dlp is missing: only direct video links play, "
+                         "not YouTube and similar sites",
+        "play_no_mpv": "Play on PC: mpv is not installed",
+        "play_no_mpv_hint": "Install mpv (and yt-dlp for YouTube and similar sites)",
         "date": "%b %d, %H:%M",
     },
     "de": {
@@ -192,6 +202,16 @@ _TEXTS = {
         "vpn_lan": "{vpn} ist ein VPN; Empfang stattdessen auf der LAN-Schnittstelle",
         "vpn_only": "Nur {vpn} (ein VPN) hat eine Standardroute; das iPhone erreicht "
                     "diese Adresse vielleicht nicht. Schnittstelle in den Einstellungen setzen.",
+        "play_title": "Wird am PC abgespielt",
+        "play_playing": "Läuft am PC",
+        "play_pause": "Pause / weiter",
+        "play_stop": "Stopp",
+        "play_ready": "Am PC abspielen bereit",
+        "play_ready_hint": "Einen Video-Link an den Kurzbefehl „Am PC abspielen“ teilen",
+        "play_no_ytdlp": "yt-dlp fehlt: nur direkte Video-Links laufen, "
+                         "nicht YouTube und ähnliche Seiten",
+        "play_no_mpv": "Am PC abspielen: mpv ist nicht installiert",
+        "play_no_mpv_hint": "mpv installieren (und yt-dlp für YouTube und ähnliche Seiten)",
         "date": "%d.%m. %H:%M",
     },
 }

@@ -70,6 +70,45 @@ ErrorText=Paste the iCloud link of the shared BlueFerry shortcut.
 Help=The iCloud link of the shared "BlueFerry" shortcut. The setup page offers it as "Add shortcut". Empty: the built-in link, if any.
 HelpUrl=https://github.com/joshii-h/blueferry-plugin-shortcuts#the-blueferry-shortcut
 
+[ConfigGroup play]
+Label=Play on PC
+Help=Share a video link on the iPhone to the "Play on PC" shortcut and it plays here in mpv, like casting to a TV.
+
+[Config play_on_pc]
+Label=Play links from the iPhone on this PC
+Type=bool
+Default=false
+Group=play
+Help=Enables POST /play, /pause and /stop. Needs mpv; YouTube and similar sites also need yt-dlp. A new link replaces what is playing.
+HelpUrl=https://github.com/joshii-h/blueferry-plugin-shortcuts#play-on-pc
+
+[Config play_fullscreen]
+Label=Fullscreen
+Type=bool
+Default=true
+Group=play
+ShowIf=play_on_pc=true
+
+[Config play_quality]
+Label=Video quality
+Type=choice
+Choices=best;1080p;720p;480p;audio
+Default=best
+Group=play
+ShowIf=play_on_pc=true
+Help=Highest resolution yt-dlp picks; "audio" plays the sound only.
+
+[Config play_options]
+Label=Extra mpv options
+Type=string
+Group=play
+ShowIf=play_on_pc=true
+Placeholder=--volume=60 --hwdec=auto
+Pattern=^[A-Za-z0-9 =.,_-]{0,300}$
+ErrorText=Only options from the list in the README, separated by spaces.
+Help=Optional. Only a fixed list is accepted, e.g. --volume=60, --mute=yes, --hwdec=auto, --screen=1, --profile=NAME.
+HelpUrl=https://github.com/joshii-h/blueferry-plugin-shortcuts#play-on-pc
+
 [Config allow_http]
 Label=Allow unencrypted in the home network (HTTP)
 Type=bool

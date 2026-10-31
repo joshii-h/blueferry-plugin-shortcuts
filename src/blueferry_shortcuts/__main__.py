@@ -15,7 +15,9 @@ from blueferry_plugin_kit import netaddr
 
 from blueferry_shortcuts import PLUGIN_ID, load_manifest, manifest_text
 from blueferry_shortcuts.netguard import NetworkManagerNetworks, Networks, approvable
+from blueferry_shortcuts.player import Player
 from blueferry_shortcuts.settings import (
+    Settings,
     SettingsError,
     SettingsStore,
     certificate_store,
@@ -171,6 +173,17 @@ def networks(action: str, name: str | None, store: SettingsStore | None = None,
     return 0
 
 
+def print_play_status(settings: Settings, player: Player | None = None) -> None:
+    """Play on PC: the switch and the tools it needs."""
+    tools = (player or Player()).tools()
+    print(f"Play on PC: {'on' if settings.play_on_pc else 'off'} "
+          f"(quality {settings.play_quality}, "
+          f"{'fullscreen' if settings.play_fullscreen else 'window'})")
+    print(f"  mpv:      {tools.mpv or 'MISSING - install mpv'}")
+    print(f"  yt-dlp:   {tools.ytdlp or 'missing - YouTube and similar sites will not play'}")
+    print(f"  mpv-mpris: {'found (media keys work)' if tools.mpris else 'not found (optional)'}")
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(prog=ENTRY_POINT, description=__doc__)
     commands = parser.add_subparsers(dest="command", required=True)
@@ -215,6 +228,7 @@ def main(argv: list[str] | None = None) -> int:
             return 1
         print(f"Listen on: {settings.bind_address or 'interface of the default route'}, "
               f"port {settings.port}")
+        print_play_status(settings)
         return 0
     try:
         manifest = load_manifest()
