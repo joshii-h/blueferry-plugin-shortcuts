@@ -6,14 +6,22 @@ import os
 import socket
 import stat
 
+import pytest
 from blueferry.plugin_api import PLUGIN_INTERFACE
 from blueferry.plugin_api.testing import inline_service
+from blueferry_plugin_kit.lanserver import RequestError
 from fakehost import FakeHost
 from fakenet import FakeNetworks
 
 from blueferry_shortcuts import PLUGIN_ID, load_manifest, manifest_text
 from blueferry_shortcuts import __main__ as cli
-from blueferry_shortcuts.server import check_url, parse_flag, parse_level, sniff_image
+from blueferry_shortcuts.server import (
+    check_public_target,
+    check_url,
+    parse_flag,
+    parse_level,
+    sniff_image,
+)
 from blueferry_shortcuts.service import ShortcutsService, battery_icon, mask_token
 from blueferry_shortcuts.settings import (
     TOKEN_ALPHABET,
@@ -273,3 +281,32 @@ def test_cli_networks(tmp_path, capsys) -> None:
     assert cli.networks("list", None, store) == 0
     out = capsys.readouterr().out
     assert HOME.uuid in out and "Plain HTTP is on" in out
+
+
+def test_play_targets_must_not_be_the_pc_itself() -> None:
+    def public(host):
+        return ["93.184.215.14"]
+
+    for bad in ("http://127.0.0.1/", "http://127.8.9.10/", "http://[::1]/", "http://0.0.0.0/",
+                "http://0.1.2.3/", "http://[::]/", "http://[::ffff:127.0.0.1]/",
+                "http://[::ffff:169.254.169.254]/", "http://169.254.169.254/",
+                "http://[fe80::1%25eth0]/", "http://localhost:8080/", "http://LOCALHOST./",
+                "http://api.localhost/"):
+        with pytest.raises(RequestError) as caught:
+            check_public_target(bad, public)
+        assert (caught.value.status, caught.value.token) == (400, "url-not-public"), bad
+    for good in ("http://192.168.1.5/", "http://10.0.0.2:8096/", "http://[fd00::5]/",
+                 "https://www.youtube.com/watch?v=x", "http://172.16.0.1/"):
+        check_public_target(good, public)
+    # Any resolved address that points back at the PC is enough to refuse.
+    with pytest.raises(RequestError):
+        check_public_target("https://rebind.example/", lambda h: ["93.184.215.14", "::1"])
+    with pytest.raises(RequestError):
+        check_public_target("https://meta.example/", lambda h: ["169.254.169.254"])
+    with pytest.raises(RequestError):
+        check_public_target("https://m.example/", lambda h: ["::ffff:127.0.0.1"])
+
+    def unresolvable(host):
+        raise OSError("no such name")
+
+    check_public_target("https://nowhere.example/", unresolvable)

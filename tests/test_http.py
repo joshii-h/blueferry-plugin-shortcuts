@@ -31,7 +31,8 @@ def _free_port() -> int:
 
 
 class Harness:
-    def __init__(self, tmp_path, networks=None, player=None, **settings) -> None:
+    def __init__(self, tmp_path, networks=None, player=None, resolve_host=None,
+                 **settings) -> None:
         self.store = SettingsStore(tmp_path / "config", tmp_path / "state")
         self.port = _free_port()
         self.networks = networks or FakeNetworks()
@@ -45,6 +46,8 @@ class Harness:
             local_addresses=lambda: ["127.0.0.1"], lang="de",
             route_tunnel=lambda: self.tunnel, networks=self.networks,
             run_async=lambda work: work(), **({"player": player} if player else {}),
+            # No real DNS in tests: every name is a public address.
+            resolve_host=resolve_host or (lambda host: ["93.184.215.14"]),
         )
         self.host = FakeHost(self.service)
         self.service.start()

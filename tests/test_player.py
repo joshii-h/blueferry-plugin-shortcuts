@@ -408,10 +408,10 @@ def test_stale_sockets_are_removed_live_ones_stay(tmp_path) -> None:
 def play_harness(tmp_path):
     made = []
 
-    def make(spawn=None, ipc=None, mpv="/usr/bin/mpv", **settings):
+    def make(spawn=None, ipc=None, mpv="/usr/bin/mpv", resolve_host=None, **settings):
         spawn, ipc = spawn or FakeSpawn(), ipc or FakeIpc()
         player = _player(tmp_path, spawn=spawn, ipc=ipc, mpv=mpv)
-        harness = Harness(tmp_path, player=player, **settings)
+        harness = Harness(tmp_path, player=player, resolve_host=resolve_host, **settings)
         harness.spawn, harness.ipc = spawn, ipc
         made.append(harness)
         return harness
@@ -497,6 +497,20 @@ def test_plugin_stop_quits_the_player(play_harness) -> None:
     h.close()
     assert not h.service._player.playing()
     assert h.ipc.commands[-1][1] == ["quit"]
+
+
+def test_play_refuses_links_to_the_pc_itself(play_harness) -> None:
+    resolved = {"intranet.example": ["192.168.1.20"], "evil.example": ["127.0.0.1"]}
+    h = play_harness(play_on_pc=True,
+                     resolve_host=lambda host: resolved.get(host, ["93.184.215.14"]))
+    for bad in ("http://127.0.0.1:47801/clipboard", "http://[::1]/", "http://localhost/",
+                "http://169.254.169.254/latest/meta-data/", "http://evil.example/v"):
+        status, _t, body = h.request("POST", "/play", {"url": bad})
+        assert (status, json.loads(body)) == (400, {"error": "url-not-public"}), bad
+    assert h.spawn.calls == []
+    # The home network stays allowed: Jellyfin, a NAS.
+    assert h.request("POST", "/play", {"url": "http://intranet.example:8096/v"})[0] == 200
+    assert h.request("POST", "/play", {"url": "http://192.168.1.5/v.mp4"})[0] == 200
 
 
 def test_play_settings_in_the_form(play_harness) -> None:

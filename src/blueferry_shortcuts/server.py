@@ -42,6 +42,7 @@ import ipaddress
 import json
 import logging
 import math
+import socket
 import ssl
 import threading
 import time
@@ -91,6 +92,7 @@ _PRIVATE_NETWORKS = tuple(ipaddress.ip_network(n) for n in (
     "10.0.0.0/8", "172.16.0.0/12", "192.168.0.0/16", "169.254.0.0/16", "127.0.0.0/8",
     "fc00::/7", "fe80::/10", "::1/128",
 ))
+_THIS_NETWORK = ipaddress.ip_network("0.0.0.0/8")
 _TRUE = {"true", "yes", "ja", "1", "on"}
 _FALSE = {"false", "no", "nein", "0", "off", ""}
 
@@ -154,6 +156,52 @@ def check_url(value: object) -> str:
     if parts.scheme.lower() not in ("http", "https") or not parts.hostname:
         raise RequestError(400, "url-not-http")
     return url
+
+
+def resolve_addresses(host: str) -> list[str]:
+    """The addresses ``host`` resolves to (blocking; never on the main loop)."""
+    infos = socket.getaddrinfo(host, None, type=socket.SOCK_STREAM)
+    return [str(info[4][0]) for info in infos]
+
+
+def _not_public(ip: ipaddress.IPv4Address | ipaddress.IPv6Address) -> bool:
+    """Loopback, link-local (cloud metadata at 169.254.169.254) or
+    unspecified, also as an IPv4-mapped IPv6 address. Private LAN addresses
+    (RFC 1918, unique-local) are allowed on purpose: Jellyfin, a NAS."""
+    if isinstance(ip, ipaddress.IPv6Address) and ip.ipv4_mapped is not None:
+        ip = ip.ipv4_mapped
+    if isinstance(ip, ipaddress.IPv4Address) and ip in _THIS_NETWORK:
+        return True       # 0.0.0.0/8: Linux reaches this host through it
+    return ip.is_loopback or ip.is_link_local or ip.is_unspecified
+
+
+def check_public_target(url: str, resolve: Callable[[str], list[str]]) -> None:
+    """Refuse a link that would make the PC fetch from itself: mpv, ffmpeg
+    and yt-dlp would otherwise reach local-only services (blind SSRF).
+    RequestError 400 ``url-not-public``. A name that does not resolve passes:
+    mpv cannot fetch it either."""
+    host = (urlsplit(url).hostname or "").rstrip(".").lower()
+    if not host or host == "localhost" or host.endswith(".localhost"):
+        raise RequestError(400, "url-not-public")
+    try:
+        literal = ipaddress.ip_address(host.split("%", 1)[0])
+    except ValueError:
+        literal = None
+    if literal is not None:
+        if _not_public(literal):
+            raise RequestError(400, "url-not-public")
+        return
+    try:
+        addresses = resolve(host)
+    except (OSError, UnicodeError):
+        return
+    for address in addresses:
+        try:
+            ip = ipaddress.ip_address(address.split("%", 1)[0])
+        except ValueError:
+            continue
+        if _not_public(ip):
+            raise RequestError(400, "url-not-public")
 
 
 def parse_level(value: object) -> int:

@@ -59,7 +59,7 @@ from blueferry_shortcuts.player import (
     PlayOptions,
     check_options,
 )
-from blueferry_shortcuts.server import HttpsBridge
+from blueferry_shortcuts.server import HttpsBridge, check_public_target, resolve_addresses
 from blueferry_shortcuts.settings import (
     DEFAULT_HTTP_PORT,
     DEFAULT_SHORTCUT_URL,
@@ -168,6 +168,7 @@ class ShortcutsService(NotifyService):
         networks: Networks | None = None,
         run_async: Callable[[Callable[[], None]], None] = _thread,
         player: Player | None = None,
+        resolve_host: Callable[[str], list[str]] = resolve_addresses,
         **kwargs: Any,
     ) -> None:
         super().__init__(manifest, bus, **kwargs)
@@ -185,6 +186,7 @@ class ShortcutsService(NotifyService):
         self._run_async = run_async
         self._player = player or Player()
         self._player.on_change = self._card_changed
+        self._resolve_host = resolve_host
         self._probe_certificates = probe_store(self._store.directory)
         self._sessions = SetupSessions()
         self._page = LocalPage(self._render_pc_page)
@@ -401,6 +403,9 @@ class ShortcutsService(NotifyService):
         settings = self._play_settings()
         # Sign-in data would end up in mpv's command line: drop it, as for links.
         url, _removed = strip_userinfo(url)
+        # mpv, ffmpeg and yt-dlp fetch the link from the PC: never from the
+        # PC itself (we run on a connection thread, so the lookup may wait).
+        check_public_target(url, self._resolve_host)
         options = PlayOptions(settings.play_fullscreen, settings.play_quality,
                               check_options(settings.play_options))
         host = _host_of(url)
