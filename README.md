@@ -15,6 +15,7 @@ session bus and talks to BlueFerry only through `blueferry.plugin_api`.
 | `GET /clipboard` | Returns the PC clipboard as text, so a shortcut can copy it to the iPhone. **Off by default.** |
 | `POST /link` | Notification with the host name and an "Open" button that opens the full URL (http/https only). Sign-in data in the link (`https://user:password@host/…`) is removed first and the notification says so. |
 | `POST /battery` | Card item "iPhone battery 87 % ⚡ charging" with the time of the report. |
+| `POST /play`, `POST /pause`, `POST /stop` | *Play on PC*: the link plays in mpv on the PC (YouTube and similar sites through yt-dlp); pause toggles, stop quits. **Off by default**, see [Play on PC](#play-on-pc). |
 | `GET /ca.crt`, `GET /ca.mobileconfig` | The plugin's CA certificate, raw or as an iOS profile (no token needed; it is public). |
 | `GET /setup/<nonce>`, `GET /setup`, `POST /setup/test` | The guided setup (one-time link, then a 30-minute session cookie). |
 | `GET /` | A plain page pointing to "Set up iPhone" in BlueFerry. |
@@ -66,6 +67,10 @@ restarted by the test.
 | `allow_http` | off | Plain HTTP in approved networks only; see *Unencrypted in the home network*. |
 | `http_port` | 47800 | Port of the plain-HTTP listener. |
 | `http_networks` | empty | Approved NetworkManager profiles (names; delete one to remove it). |
+| `play_on_pc` | off | Enables *Play on PC* (`/play`, `/pause`, `/stop`). |
+| `play_fullscreen` | on | Start mpv in fullscreen. |
+| `play_quality` | `best` | `best`, `1080p`, `720p`, `480p` (highest resolution yt-dlp picks) or `audio` (sound only). |
+| `play_options` | empty | Extra mpv options, only from the allowlist under *Play on PC*. |
 
 ## Security
 
@@ -91,7 +96,8 @@ restarted by the test.
   headers; a body gets 20 s more plus one second per 32 KiB), so a client
   trickling bytes cannot hold a connection.
 - No request content is logged, and nothing is forwarded to the network:
-  requests only reach the clipboard, the card and notifications.
+  requests only reach the clipboard, the card and notifications (and, with
+  *Play on PC* switched on, mpv, which then fetches the shared link).
   Notifications for the clipboard show the length, not the text; links show
   only the host, never path or query. User name and password in a link are
   stripped before the link reaches BlueFerry and are never logged.
@@ -102,6 +108,90 @@ restarted by the test.
   not kept in the keyring on purpose: you need to read it to type it into
   the Shortcuts app, and the card shows it (masked until you reveal it,
   hidden again after two minutes).
+
+## Play on PC
+
+Like casting to a TV, for any app with a share sheet: share a video link
+on the iPhone to the shortcut **Play on PC** and it plays on the PC in
+[mpv](https://mpv.io), straight from the internet. mpv hands YouTube,
+Vimeo, Twitch, PeerTube and the
+[other sites yt-dlp knows](https://github.com/yt-dlp/yt-dlp/blob/master/supportedsites.md)
+to [yt-dlp](https://github.com/yt-dlp/yt-dlp); direct links to video or
+audio files play without it.
+
+Needs `mpv`, and `yt-dlp` for sites like YouTube (Gentoo: `media-video/mpv`,
+`net-misc/yt-dlp`; Debian/Fedora: `mpv`, `yt-dlp`). `mpv-mpris` is
+optional: with it the desktop's media keys and media controls also reach
+the player. `blueferry-shortcuts status` lists what it finds; the card
+says when mpv or yt-dlp is missing.
+
+Turn it on in the settings, section **Play on PC** (`play_on_pc`). Then:
+
+- **One player at a time; a new link replaces what is playing** (in the
+  same window, so fullscreen stays). No queue.
+- **Pause on PC** toggles pause, **Stop on PC** quits the player. The card
+  shows what plays (host name only) with *Pause / resume* and *Stop*.
+- Extra mpv options (`play_options`) are limited to this list, separated
+  by spaces: `--volume=0…100`, `--mute=yes|no`, `--hwdec=auto|auto-safe|no|vaapi|vulkan`,
+  `--screen=N`, `--fs-screen=N`, `--ontop`, `--no-ontop`, `--border=yes|no`,
+  `--no-border`, `--loop-file=inf|no|N`, `--loop-playlist=inf|no`,
+  `--keep-open=yes|no|always`, `--save-position-on-quit`,
+  `--resume-playback` / `--no-resume-playback`, `--sub-auto=…`,
+  `--alang=de,en`, `--slang=de,en`, `--speed=0.25…4` and
+  `--profile=NAME` (a profile from your own `mpv.conf`). Your normal mpv
+  configuration (for example uosc) applies.
+
+### The "Play on PC" shortcut
+
+1. New shortcut, name it **Play on PC**. In its details (ⓘ) switch on
+   **Show in Share Sheet**; as input types keep only **URLs** and
+   **Safari web pages**.
+2. At the top, "Receive **URLs and Safari web pages** from **Share
+   Sheet**"; *If there is no input*: **Get Clipboard** (then the shortcut
+   also works from the home screen with a copied link).
+3. Action **Get Contents of URL**: URL `https://<PC>:47801/play`, Method
+   `POST`, header `Authorization` = `Bearer <token>` (as for the other
+   shortcuts), Request Body `JSON` with one field: key `url`, type **Text**,
+   value: the magic variable **Shortcut Input**.
+4. Optional: **Show Notification** "Playing on PC".
+
+Then in YouTube, Safari or any other app: *Share* > **Play on PC**.
+
+**Pause on PC** and **Stop on PC** are two more shortcuts with only the
+action **Get Contents of URL**: URL `…/pause` or `…/stop`, Method `POST`,
+the same header, no body (or an empty `JSON` body). Calling *Pause on PC*
+again resumes. Both work well as home-screen icons, in the Control Center
+(iOS 18) or with "Hey Siri, Pause on PC".
+
+Answers: 200 `{"ok": true, "replaced": false}` (true when a link replaced
+the one playing), 403 `play-disabled` (switch off), 503 `mpv-missing`,
+429 `play-rate-limited`, 409 `not-playing` (pause without a player).
+
+### Privacy and safety
+
+- Only a request with the token gets through, like every other endpoint;
+  only `http`/`https` links up to 2048 characters without spaces or control
+  characters; at most 6 new links per minute (plus the server's general
+  limit of 30 requests per minute). Sign-in data (`user:password@`) is
+  removed from the link first.
+- The link is never given to a shell: mpv is started with an argument
+  list and `--` before the link, so nothing in the link can become an mpv
+  option. A replacing link goes through mpv's JSON IPC as a string. mpv
+  itself refuses local files listed in a playlist that came from the
+  network.
+- The IPC socket sits in `$XDG_RUNTIME_DIR/blueferry-shortcuts/` (0700,
+  checked owner, no symlink), gets a new random name per player and mode
+  0600.
+- The PC fetches the video itself: the site sees the PC's IP address, and
+  yt-dlp/mpv contact the site as for any video you open on the PC. Nothing
+  goes through the iPhone or BlueFerry.
+- Logs never contain the link. The notification and the card show only
+  the host name. While mpv runs, the link is in its command line (visible
+  in the process list (`ps`) on this PC), like any link opened in a player.
+- If the player window does not appear when the plugin was started by
+  D-Bus, the session bus may lack the Wayland variables: run
+  `dbus-update-activation-environment WAYLAND_DISPLAY DISPLAY XDG_CURRENT_DESKTOP`
+  in your session start (niri, Sway, …).
 
 ## Set up your iPhone (English)
 
@@ -394,6 +484,24 @@ Braucht `allow_clipboard_read` an.
    Methode `GET`, Header `Authorization` = `Bearer <Token>`, kein Hauptteil.
 3. Aktion **In Zwischenablage kopieren** mit *Inhalte von URL*.
 
+#### Kurzbefehl „Am PC abspielen“
+
+Braucht in den Einstellungen **Play on PC** (`play_on_pc`) an, dazu `mpv`
+und für YouTube & Co. `yt-dlp`. Ein neuer Link ersetzt, was gerade läuft.
+Details und Datenschutz: [Play on PC](#play-on-pc).
+
+1. Neuer Kurzbefehl **Am PC abspielen**; in den Details (ⓘ) *Im
+   Share-Sheet anzeigen* einschalten, Eingabe nur **URLs** und
+   **Safari-Webseiten**; *Wenn keine Eingabe*: **Zwischenablage abrufen**.
+2. Aktion **Inhalte von URL abrufen**: URL `https://<PC>:47801/play`,
+   Methode `POST`, Header wie oben, Hauptteil `JSON` mit Schlüssel `url`,
+   Typ **Text**, Wert **Kurzbefehleingabe**.
+3. In YouTube, Safari usw.: *Teilen* > **Am PC abspielen**.
+
+**Pause am PC** und **Stopp am PC**: je nur **Inhalte von URL abrufen**
+mit `…/pause` bzw. `…/stop`, Methode `POST`, gleicher Header, kein
+Hauptteil. Nochmals *Pause am PC* setzt fort.
+
 #### Kurzbefehl 3: „An PC: Akku“
 
 1. Neuer Kurzbefehl **An PC: Akku**.
@@ -425,8 +533,8 @@ curl --cacert ~/.config/blueferry/plugins/io.weirdware.blueferry.shortcuts/ca.pe
 ```
 
 Errors are JSON `{"error": "…"}` with the HTTP status: 401 token, 403 feature
-off, 411 missing `Content-Length`, 413 too large, 415 type not accepted,
-429 rate limit, 503 clipboard not reachable.
+off, 409 nothing playing, 411 missing `Content-Length`, 413 too large, 415
+type not accepted, 429 rate limit, 503 clipboard or player not available.
 
 ## Develop
 
@@ -445,7 +553,9 @@ The QR code comes from [segno](https://pypi.org/project/segno/).
 Tests run the real HTTPS server on localhost with the plugin's CA, and the
 kit's fake clipboard and fake host, which checks every card reply against
 the 1.2 limits and fetches popups the 1.5 way (`NotifyChanged`, then
-`GetPendingNotification`). The
+`GetPendingNotification`). Play on PC
+runs against a fake spawn and fake mpv IPC (plus the real IPC client
+against a fake socket); it never starts mpv. The
 Shortcuts steps above have not been verified on an iPhone yet; the
 NetworkManager rules are tested against a fake NetworkManager.
 
