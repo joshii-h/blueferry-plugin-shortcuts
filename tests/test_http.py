@@ -507,11 +507,13 @@ def test_offered_clipboard_needs_the_token_and_expires(harness) -> None:
 def test_offer_refuses_empty_and_large_clipboards(harness) -> None:
     h = harness()
     h.clipboard.current = ""
-    h.host.invoke("state", "offer_clipboard")
+    assert h.host.invoke("state", "offer_clipboard") == {
+        "ok": False, "message": "Die Zwischenablage enthält keinen Text", "open_uri": None}
     assert h.service._offer is None
     assert h.host.notifications[-1][1] == "Die Zwischenablage enthält keinen Text"
     h.clipboard.current = "x" * (MAX_TEXT_BYTES + 1)
-    h.host.invoke("state", "offer_clipboard")
+    reply = h.host.invoke("state", "offer_clipboard")
+    assert reply["ok"] is False and "64 KB" in reply["message"]
     assert h.service._offer is None and "64 KB" in h.host.notifications[-1][1]
 
 

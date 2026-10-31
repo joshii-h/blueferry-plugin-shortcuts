@@ -357,12 +357,14 @@ class ShortcutsService(NotifyService):
                          self._t["offer_taken_body"].format(count=len(text)), "phone")
         return text
 
-    def offer_clipboard(self) -> None:
-        """Worker thread: keep the PC clipboard text for one pickup by the iPhone.
+    def offer_clipboard(self) -> str:
+        """Keep the PC clipboard text for one pickup by the iPhone; returns
+        "" when offered, else why not.
 
         iOS cannot be pushed to; the iPhone fetches it with the existing
         ``GET /clipboard`` ("PC → Clipboard"), which needs no opt-in for a
-        text offered on purpose like this. Failures arrive as a popup.
+        text offered on purpose like this. Failures also arrive as a popup
+        (a desktop keyboard shortcut running the CLI has no terminal).
         """
         t = self._t
         try:
@@ -374,7 +376,7 @@ class ShortcutsService(NotifyService):
                        else t["offer_empty"] if not text else "")
         if problem or text is None:
             self.emit_notify(t["offer"], problem, "dialog-warning")
-            return
+            return problem
         with self._lock:
             self._offer = (text, time.monotonic() + OFFER_SECONDS)
             if self._offer_timer is not None:
@@ -385,6 +387,7 @@ class ShortcutsService(NotifyService):
             self._offer_timer.start()
         log.info("clipboard offered to the iPhone")
         self._card_changed()
+        return ""
 
     def withdraw_offer(self) -> None:
         with self._lock:
@@ -785,9 +788,10 @@ class ShortcutsService(NotifyService):
         if item_id == "bridge" and action_id == "setup_iphone":
             return self.begin_setup()
         if item_id == "state" and action_id == "offer_clipboard":
-            # wl-paste may take a moment: not on the main loop.
-            self._run_async(self.offer_clipboard)
-            return result(True)
+            # Read right away (wl-paste is quick, at most its 5 s timeout) so
+            # the caller, the card or the CLI, learns whether it worked.
+            problem = self.offer_clipboard()
+            return result(not problem, problem or None)
         if item_id == "state" and action_id == "withdraw_offer":
             self.withdraw_offer()
             return result(True)

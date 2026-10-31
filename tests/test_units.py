@@ -284,4 +284,7 @@ def test_cli_send_clipboard_invokes_the_card_action(capsys) -> None:
         raise RuntimeError("no bus")
 
     assert cli.send_clipboard(broken) == 1
+    capsys.readouterr()
     assert cli.send_clipboard(lambda *a: json.dumps({"ok": False, "message": "nein"})) == 1
+    captured = capsys.readouterr()
+    assert captured.err.strip() == "nein" and "offered" not in captured.out
