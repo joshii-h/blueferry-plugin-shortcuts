@@ -474,7 +474,7 @@ def test_play_refuses_bad_urls(play_harness) -> None:
     assert h.spawn.calls == []
 
 
-def test_card_card_actions_and_missing_tools(play_harness) -> None:
+def test_card_actions_pause_and_stop(play_harness) -> None:
     h = play_harness(play_on_pc=True)
     item = next(item for item in h.host.items() if item["id"] == "play")
     assert item["title"] == "Am PC abspielen bereit"
@@ -483,7 +483,9 @@ def test_card_card_actions_and_missing_tools(play_harness) -> None:
     assert h.ipc.paused is True
     assert h.host.invoke("play", "stop")["ok"] is True
     assert not h.service._player.playing()
-    h.close()
+
+
+def test_card_and_status_without_mpv(play_harness) -> None:
     h = play_harness(play_on_pc=True, mpv=None)
     item = next(item for item in h.host.items() if item["id"] == "play")
     assert item["icon"] == "dialog-warning"
