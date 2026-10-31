@@ -154,7 +154,8 @@ def test_pc_page_needs_its_secret_and_a_loopback_host(harness) -> None:
     h = harness()
     url = h.host.invoke("bridge", "setup_iphone")["open_uri"]
     base, secret = url.rstrip("/").rsplit("/", 1)
-    assert _pc_page(f"{base}/{secret[:-1]}x/")[0] == 404
+    wrong = secret[:-1] + ("y" if secret.endswith("x") else "x")    # always differs
+    assert _pc_page(f"{base}/{wrong}/")[0] == 404
     assert _pc_page(f"{base}/")[0] == 404
     assert _pc_page(url, host="evil.example")[0] == 404
 
