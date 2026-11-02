@@ -31,7 +31,9 @@ plugin. Since 1.5 the popup text (clipboard size, link host) no longer
 travels on the session bus: the plugin only emits the content-free
 `NotifyChanged` signal and BlueFerry fetches the popup with
 `GetPendingNotification`, so other processes on the bus cannot read it.
-Version 0.4.0 (2026-10-16) is the first one built for API 1.5.
+Version 0.4.0 (2026-10-16) is the first one built for API 1.5; 0.4.1
+(2026-11-02) takes `blueferry-plugin-api` 1.6.0 from the official repository
+and still runs on any BlueFerry with plugin API 1.5.
 
 The endpoint must be running for the iPhone to reach it. BlueFerry starts
 the plugin through D-Bus when it shows the phone card. To have it running
@@ -486,7 +488,7 @@ python3 -m venv --system-site-packages .venv   # dbus-python, PyGObject from the
 BlueFerry repository. The clipboard helper, the listen-address choice, the
 owner-only files, the certificates and the hardened HTTPS server come from
 the shared [blueferry-plugin-kit](https://github.com/joshii-h/blueferry-plugin-kit)
-(tag `kit-v0.4.0`, extra `lanserver`); the routes stay in this plugin.
+(tag `kit-v0.4.1`, extra `lanserver`); the routes stay in this plugin.
 The QR code comes from [segno](https://pypi.org/project/segno/).
 Tests run the real HTTPS server on localhost with the plugin's CA, and the
 kit's fake clipboard and fake host, which checks every card reply against
